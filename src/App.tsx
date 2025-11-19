@@ -1,18 +1,19 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronRight, Award } from 'lucide-react';
 
-// --- 类型定义 ---
+// --- 1. 定义数据结构接口 (Interfaces) ---
+// 告诉 TypeScript 我们的餐厅数据长什么样
 interface Restaurant {
   id: number;
   name: string;
   location: string;
   cuisine: string;
   priceTier: string;
-  visited?: boolean;
-  userRating?: number;
-  userPrice?: string | number;
-  userNotes?: string;
-  visitedDate?: string | null;
+  visited: boolean;       // 必填，因为初始化时我们映射了默认值
+  userRating: number;     // 必填
+  userPrice: string | number; // 可是字符串或数字
+  userNotes: string;      // 必填
+  visitedDate: string | null; // 可能是 null
 }
 
 interface Stats {
@@ -29,8 +30,9 @@ interface StarRatingProps {
   readonly?: boolean;
 }
 
-// --- 预置数据：基于 Good Food Gift Card NSW 搜索结果 ---
-const INITIAL_RESTAURANTS: Restaurant[] = [
+// --- 预置数据 ---
+// 使用 Partial 表示初始数据只包含部分字段，后面会被补全
+const INITIAL_RESTAURANTS: Partial<Restaurant>[] = [
   { id: 1, name: "Bennelong", location: "Sydney Opera House", cuisine: "Modern Australian", priceTier: "$$$$" },
   { id: 2, name: "Quay", location: "The Rocks", cuisine: "Modern Australian", priceTier: "$$$$" },
   { id: 3, name: "Firedoor", location: "Surry Hills", cuisine: "Steak/Grill", priceTier: "$$$$" },
@@ -99,43 +101,48 @@ const StarRating: React.FC<StarRatingProps> = ({ rating, setRating, readonly = f
 
 // --- 主应用 ---
 export default function NSWFoodTracker() {
-  // 状态管理
+  // 2. 状态泛型：明确告诉 TS这里存放的是 Restaurant 数组
   const [restaurants, setRestaurants] = useState<Restaurant[]>(() => {
     const saved = localStorage.getItem('nsw_food_list');
-    return saved ? JSON.parse(saved) : INITIAL_RESTAURANTS.map(r => ({
+    if (saved) {
+      return JSON.parse(saved);
+    } 
+    // 初始化数据时补全所有字段
+    return INITIAL_RESTAURANTS.map(r => ({
       ...r,
       visited: false,
       userRating: 0,
       userPrice: '',
       userNotes: '',
       visitedDate: null
-    }));
+    } as Restaurant));
   });
   
   const [view, setView] = useState<'list' | 'stats'>('list');
   const [filter, setFilter] = useState<string>('');
   const [selectedCuisine, setSelectedCuisine] = useState<string>('All');
+  
+  // 3. 关键修复：告诉 TS activeRestaurant 可能是 null，也可能是 Restaurant 对象
   const [activeRestaurant, setActiveRestaurant] = useState<Restaurant | null>(null);
   const [isEditing, setIsEditing] = useState<boolean>(false);
 
-  // 持久化存储
   useEffect(() => {
     localStorage.setItem('nsw_food_list', JSON.stringify(restaurants));
   }, [restaurants]);
 
-  // 统计数据
+  // 统计数据类型定义
   const stats = useMemo<Stats>(() => {
     const visited = restaurants.filter(r => r.visited);
     const total = restaurants.length;
     const percentage = total > 0 ? Math.round((visited.length / total) * 100) : 0;
     const totalSpent = visited.reduce((acc, curr) => acc + (Number(curr.userPrice) || 0), 0);
     
+    // 4. Reduce 类型修复：显式声明 accumulator 是一个字符串键数字值的对象
     const cuisineCounts = visited.reduce<Record<string, number>>((acc, curr) => {
       acc[curr.cuisine] = (acc[curr.cuisine] || 0) + 1;
       return acc;
     }, {});
     
-    // sort cuisines by popularity
     const topCuisines = Object.entries(cuisineCounts)
       .sort(([,a], [,b]) => b - a)
       .slice(0, 3);
@@ -143,7 +150,6 @@ export default function NSWFoodTracker() {
     return { visited: visited.length, total, percentage, totalSpent, topCuisines };
   }, [restaurants]);
 
-  // 过滤逻辑
   const cuisines = ['All', ...new Set(restaurants.map(r => r.cuisine))];
   
   const filteredList = restaurants.filter(r => {
@@ -153,7 +159,7 @@ export default function NSWFoodTracker() {
     return matchesSearch && matchesCuisine;
   });
 
-  // 处理打卡/更新
+  // 参数类型定义
   const handleUpdateRestaurant = (id: number, data: Partial<Restaurant>) => {
     setRestaurants(prev => prev.map(r => {
       if (r.id === id) {
@@ -170,22 +176,230 @@ export default function NSWFoodTracker() {
     if (!activeRestaurant) return null;
     const r = activeRestaurant;
     
-    // Form state (inner component hooks need to be at top level of component)
-    // We are rendering this conditionally, which is generally okay if the condition is stable,
-    // but ideally Modal should be a separate component or always rendered but hidden.
-    // For this simple file, we will invoke hooks inside this sub-function component.
+    // 在组件内部定义 Hook 是 React 的规则，这里我们使用简单的条件渲染
+    // 注意：在大型应用中通常建议把 Modal 拆分为独立组件以避免 Hook 规则问题
+    // 这里为了保持单文件，我们使用一个特定技巧：即使 activeRestaurant 为 null 也渲染 Hooks，但在 return 时阻断
+    // 为了最简单的 TS 修复，我们直接在渲染逻辑里处理
     
-    const [notes, setNotes] = useState<string>(r.userNotes || '');
-    const [price, setPrice] = useState<string | number>(r.userPrice || '');
-    const [rating, setRating] = useState<number>(r.userRating || 0);
+    return <RestaurantModalContent r={r} onClose={() => setActiveRestaurant(null)} onUpdate={handleUpdateRestaurant} isEditingInitial={isEditing} setIsEditingParent={setIsEditing} />;
+  };
 
-    return (
-      <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans pb-24">
+      <header className="bg-white sticky top-0 z-40 border-b border-slate-200 shadow-sm">
+        <div className="max-w-3xl mx-auto px-4 py-4">
+          <div className="flex justify-between items-center mb-4">
+            <div>
+              <h1 className="text-2xl font-serif font-bold text-slate-900">NSW 美食摘星</h1>
+              <p className="text-xs text-slate-500 font-medium tracking-wide">THE GOOD FOOD CHALLENGE</p>
+            </div>
+            <div className="text-right">
+              <div className="text-2xl font-bold text-amber-500">{stats.visited}<span className="text-slate-300 text-lg">/</span><span className="text-slate-400 text-lg">{stats.total}</span></div>
+            </div>
+          </div>
+          <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+            <div 
+              className="h-full bg-gradient-to-r from-amber-400 to-orange-500 transition-all duration-1000 ease-out"
+              style={{ width: `${stats.percentage}%` }}
+            />
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-3xl mx-auto px-4 py-6">
+        <div className="flex gap-2 mb-6 bg-slate-200 p-1 rounded-xl">
+          <button 
+            onClick={() => setView('list')}
+            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${view === 'list' ? 'bg-white shadow text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}
+            type="button"
+          >
+            餐厅清单
+          </button>
+          <button 
+            onClick={() => setView('stats')}
+            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${view === 'stats' ? 'bg-white shadow text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}
+            type="button"
+          >
+            我的战绩
+          </button>
+        </div>
+
+        {view === 'list' ? (
+          <>
+            <div className="space-y-3 mb-6">
+              <div className="relative">
+                <Search className="absolute left-3 top-3 text-slate-400" size={18} />
+                <input 
+                  type="text" 
+                  placeholder="搜索餐厅名称或地点..." 
+                  className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-900/10"
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value)}
+                />
+              </div>
+              <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+                {cuisines.map(c => (
+                  <button
+                    key={c}
+                    onClick={() => setSelectedCuisine(c)}
+                    className={`whitespace-nowrap px-4 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                      selectedCuisine === c 
+                        ? 'bg-slate-800 text-white border-slate-800' 
+                        : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                    }`}
+                    type="button"
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              {filteredList.length === 0 ? (
+                <div className="text-center py-12 text-slate-400">
+                  <Utensils size={48} className="mx-auto mb-3 opacity-20" />
+                  <p>没有找到相关餐厅</p>
+                </div>
+              ) : (
+                filteredList.map(r => (
+                  <div 
+                    key={r.id}
+                    onClick={() => { setActiveRestaurant(r); setIsEditing(false); }}
+                    className={`bg-white p-4 rounded-xl border transition-all cursor-pointer active:scale-[0.98] flex items-center justify-between ${
+                      r.visited ? 'border-amber-200 bg-amber-50/30' : 'border-slate-100 hover:border-slate-300 hover:shadow-sm'
+                    }`}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <h3 className={`font-bold truncate ${r.visited ? 'text-slate-800' : 'text-slate-900'}`}>
+                          {r.name}
+                        </h3>
+                        {r.visited && <CheckCircle size={14} className="text-amber-500 flex-shrink-0" />}
+                      </div>
+                      <div className="flex items-center text-xs text-slate-500 gap-3">
+                        <span className="flex items-center gap-1"><MapPin size={12} /> {r.location}</span>
+                        <span className="px-1.5 py-0.5 bg-slate-100 rounded text-slate-600 font-medium">{r.cuisine}</span>
+                        <span>{r.priceTier}</span>
+                      </div>
+                    </div>
+                    
+                    <div className="pl-4 flex flex-col items-end gap-1">
+                      {r.visited ? (
+                         (r.userRating || 0) > 0 ? (
+                           <div className="flex text-amber-400">
+                             {[...Array(r.userRating)].map((_, i) => <Star key={i} size={12} fill="currentColor" />)}
+                           </div>
+                         ) : <span className="text-xs text-amber-600 font-medium">已打卡</span>
+                      ) : (
+                        <div className="w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center text-slate-300">
+                           <ChevronRight size={18} />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </>
+        ) : (
+          <div className="space-y-6 animate-in slide-in-from-bottom-4 fade-in duration-300">
+             <div className="grid grid-cols-2 gap-4">
+                <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
+                  <div className="text-slate-400 mb-2"><CheckCircle size={20} /></div>
+                  <div className="text-2xl font-bold text-slate-900">{stats.visited}</div>
+                  <div className="text-xs text-slate-500">已探索餐厅</div>
+                </div>
+                <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
+                  <div className="text-slate-400 mb-2"><DollarSign size={20} /></div>
+                  <div className="text-2xl font-bold text-slate-900">${stats.totalSpent}</div>
+                  <div className="text-xs text-slate-500">总美食投入</div>
+                </div>
+             </div>
+
+             <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
+               <h3 className="font-bold text-slate-900 mb-4 flex items-center gap-2">
+                 <Award className="text-amber-500" size={18}/>
+                 最爱菜系
+               </h3>
+               {stats.topCuisines.length > 0 ? (
+                 <div className="space-y-4">
+                   {stats.topCuisines.map(([cuisine, count], idx) => (
+                     <div key={cuisine} className="flex items-center gap-3">
+                       <div className="w-6 text-center font-bold text-slate-300 text-sm">#{idx + 1}</div>
+                       <div className="flex-1">
+                         <div className="flex justify-between text-sm mb-1">
+                           <span className="font-medium text-slate-700">{cuisine}</span>
+                           <span className="text-slate-400">{count} 家</span>
+                         </div>
+                         <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                           <div 
+                             className="h-full bg-slate-800 rounded-full"
+                             style={{ width: `${(count / stats.visited) * 100}%` }}
+                           />
+                         </div>
+                       </div>
+                     </div>
+                   ))}
+                 </div>
+               ) : (
+                 <p className="text-sm text-slate-400 italic text-center py-4">快去打卡你的第一家餐厅吧！</p>
+               )}
+             </div>
+
+             <div className="bg-gradient-to-br from-slate-900 to-slate-800 p-6 rounded-2xl text-white shadow-lg">
+               <h3 className="font-bold mb-2">美食家等级</h3>
+               <p className="text-sm text-slate-300 mb-4">
+                 {stats.visited < 5 ? "新手美食家 - 旅程才刚刚开始！" : 
+                  stats.visited < 20 ? "资深吃货 - 你的味蕾正在觉醒。" : 
+                  "悉尼食神 - 你是这里的美食传说！"}
+               </p>
+               <div className="flex gap-2">
+                 {[1, 5, 10, 20, 50].map(milestone => (
+                   <div 
+                     key={milestone}
+                     className={`h-8 flex-1 rounded-lg flex items-center justify-center text-xs font-bold border ${
+                       stats.visited >= milestone 
+                         ? 'bg-amber-400 border-amber-400 text-slate-900' 
+                         : 'bg-transparent border-slate-600 text-slate-600'
+                     }`}
+                   >
+                     {milestone}
+                   </div>
+                 ))}
+               </div>
+             </div>
+          </div>
+        )}
+      </main>
+
+      <RestaurantModal />
+    </div>
+  );
+}
+
+// 提取子组件以规避 Hook 渲染顺序问题
+interface ModalProps {
+  r: Restaurant;
+  onClose: () => void;
+  onUpdate: (id: number, data: Partial<Restaurant>) => void;
+  isEditingInitial: boolean;
+  setIsEditingParent: (val: boolean) => void;
+}
+
+const RestaurantModalContent: React.FC<ModalProps> = ({ r, onClose, onUpdate, isEditingInitial, setIsEditingParent }) => {
+  const [notes, setNotes] = useState<string>(r.userNotes || '');
+  const [price, setPrice] = useState<string | number>(r.userPrice || '');
+  const [rating, setRating] = useState<number>(r.userRating || 0);
+  // 使用本地 editing 状态，初始化自父级，但为了简单，我们同步父级
+  const isEditing = isEditingInitial; 
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
         <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-          {/* Modal Header */}
           <div className="bg-slate-900 p-6 text-white relative">
             <button 
-              onClick={() => setActiveRestaurant(null)}
+              onClick={onClose}
               className="absolute top-4 right-4 text-white/70 hover:text-white bg-white/10 p-1 rounded-full"
               type="button"
             >
@@ -199,7 +413,6 @@ export default function NSWFoodTracker() {
             </div>
           </div>
 
-          {/* Modal Body */}
           <div className="p-6 overflow-y-auto">
             {!r.visited && !isEditing ? (
               <div className="text-center py-8">
@@ -209,7 +422,7 @@ export default function NSWFoodTracker() {
                 <h3 className="text-lg font-semibold text-slate-800 mb-2">还没吃过这家店？</h3>
                 <p className="text-slate-500 mb-6">准备好去品尝了吗？点击下方按钮开始记录你的体验。</p>
                 <button 
-                  onClick={() => setIsEditing(true)}
+                  onClick={() => setIsEditingParent(true)}
                   className="w-full py-3 bg-slate-900 text-white rounded-xl font-medium hover:bg-slate-800 transition-colors flex items-center justify-center gap-2"
                   type="button"
                 >
@@ -254,7 +467,7 @@ export default function NSWFoodTracker() {
 
                 {(isEditing || !r.visited) && (
                   <button 
-                    onClick={() => handleUpdateRestaurant(r.id, { userRating: rating, userPrice: price, userNotes: notes })}
+                    onClick={() => onUpdate(r.id, { userRating: rating, userPrice: price, userNotes: notes })}
                     className="w-full py-3 bg-amber-500 text-white rounded-xl font-bold shadow-lg shadow-amber-500/30 hover:bg-amber-600 transition-all"
                     type="button"
                   >
@@ -264,7 +477,7 @@ export default function NSWFoodTracker() {
                 
                 {!isEditing && r.visited && (
                    <button 
-                   onClick={() => setIsEditing(true)}
+                   onClick={() => setIsEditingParent(true)}
                    className="w-full py-2 text-slate-500 text-sm hover:text-slate-800 underline decoration-dotted"
                    type="button"
                  >
@@ -276,209 +489,5 @@ export default function NSWFoodTracker() {
           </div>
         </div>
       </div>
-    );
-  };
-
-  return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans pb-24">
-      {/* Header */}
-      <header className="bg-white sticky top-0 z-40 border-b border-slate-200 shadow-sm">
-        <div className="max-w-3xl mx-auto px-4 py-4">
-          <div className="flex justify-between items-center mb-4">
-            <div>
-              <h1 className="text-2xl font-serif font-bold text-slate-900">NSW 美食摘星</h1>
-              <p className="text-xs text-slate-500 font-medium tracking-wide">THE GOOD FOOD CHALLENGE</p>
-            </div>
-            <div className="text-right">
-              <div className="text-2xl font-bold text-amber-500">{stats.visited}<span className="text-slate-300 text-lg">/</span><span className="text-slate-400 text-lg">{stats.total}</span></div>
-            </div>
-          </div>
-          
-          {/* Progress Bar */}
-          <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-            <div 
-              className="h-full bg-gradient-to-r from-amber-400 to-orange-500 transition-all duration-1000 ease-out"
-              style={{ width: `${stats.percentage}%` }}
-            />
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-3xl mx-auto px-4 py-6">
-        {/* Navigation Tabs */}
-        <div className="flex gap-2 mb-6 bg-slate-200 p-1 rounded-xl">
-          <button 
-            onClick={() => setView('list')}
-            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${view === 'list' ? 'bg-white shadow text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}
-            type="button"
-          >
-            餐厅清单
-          </button>
-          <button 
-            onClick={() => setView('stats')}
-            className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${view === 'stats' ? 'bg-white shadow text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}
-            type="button"
-          >
-            我的战绩
-          </button>
-        </div>
-
-        {view === 'list' ? (
-          <>
-            {/* Search & Filter */}
-            <div className="space-y-3 mb-6">
-              <div className="relative">
-                <Search className="absolute left-3 top-3 text-slate-400" size={18} />
-                <input 
-                  type="text" 
-                  placeholder="搜索餐厅名称或地点..." 
-                  className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-900/10"
-                  value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
-                />
-              </div>
-              <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-                {cuisines.map(c => (
-                  <button
-                    key={c}
-                    onClick={() => setSelectedCuisine(c)}
-                    className={`whitespace-nowrap px-4 py-1.5 rounded-full text-xs font-medium border transition-colors ${
-                      selectedCuisine === c 
-                        ? 'bg-slate-800 text-white border-slate-800' 
-                        : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
-                    }`}
-                    type="button"
-                  >
-                    {c}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Restaurant List */}
-            <div className="space-y-3">
-              {filteredList.length === 0 ? (
-                <div className="text-center py-12 text-slate-400">
-                  <Utensils size={48} className="mx-auto mb-3 opacity-20" />
-                  <p>没有找到相关餐厅</p>
-                </div>
-              ) : (
-                filteredList.map(r => (
-                  <div 
-                    key={r.id}
-                    onClick={() => setActiveRestaurant(r)}
-                    className={`bg-white p-4 rounded-xl border transition-all cursor-pointer active:scale-[0.98] flex items-center justify-between ${
-                      r.visited ? 'border-amber-200 bg-amber-50/30' : 'border-slate-100 hover:border-slate-300 hover:shadow-sm'
-                    }`}
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <h3 className={`font-bold truncate ${r.visited ? 'text-slate-800' : 'text-slate-900'}`}>
-                          {r.name}
-                        </h3>
-                        {r.visited && <CheckCircle size={14} className="text-amber-500 flex-shrink-0" />}
-                      </div>
-                      <div className="flex items-center text-xs text-slate-500 gap-3">
-                        <span className="flex items-center gap-1"><MapPin size={12} /> {r.location}</span>
-                        <span className="px-1.5 py-0.5 bg-slate-100 rounded text-slate-600 font-medium">{r.cuisine}</span>
-                        <span>{r.priceTier}</span>
-                      </div>
-                    </div>
-                    
-                    <div className="pl-4 flex flex-col items-end gap-1">
-                      {r.visited ? (
-                         (r.userRating || 0) > 0 ? (
-                           <div className="flex text-amber-400">
-                             {[...Array(r.userRating)].map((_, i) => <Star key={i} size={12} fill="currentColor" />)}
-                           </div>
-                         ) : <span className="text-xs text-amber-600 font-medium">已打卡</span>
-                      ) : (
-                        <div className="w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center text-slate-300">
-                           <ChevronRight size={18} />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </>
-        ) : (
-          /* Stats View */
-          <div className="space-y-6 animate-in slide-in-from-bottom-4 fade-in duration-300">
-             {/* Summary Cards */}
-             <div className="grid grid-cols-2 gap-4">
-                <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
-                  <div className="text-slate-400 mb-2"><CheckCircle size={20} /></div>
-                  <div className="text-2xl font-bold text-slate-900">{stats.visited}</div>
-                  <div className="text-xs text-slate-500">已探索餐厅</div>
-                </div>
-                <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
-                  <div className="text-slate-400 mb-2"><DollarSign size={20} /></div>
-                  <div className="text-2xl font-bold text-slate-900">${stats.totalSpent}</div>
-                  <div className="text-xs text-slate-500">总美食投入</div>
-                </div>
-             </div>
-
-             {/* Top Cuisines */}
-             <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm">
-               <h3 className="font-bold text-slate-900 mb-4 flex items-center gap-2">
-                 <Award className="text-amber-500" size={18}/>
-                 最爱菜系
-               </h3>
-               {stats.topCuisines.length > 0 ? (
-                 <div className="space-y-4">
-                   {stats.topCuisines.map(([cuisine, count], idx) => (
-                     <div key={cuisine} className="flex items-center gap-3">
-                       <div className="w-6 text-center font-bold text-slate-300 text-sm">#{idx + 1}</div>
-                       <div className="flex-1">
-                         <div className="flex justify-between text-sm mb-1">
-                           <span className="font-medium text-slate-700">{cuisine}</span>
-                           <span className="text-slate-400">{count} 家</span>
-                         </div>
-                         <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                           <div 
-                             className="h-full bg-slate-800 rounded-full"
-                             style={{ width: `${(count / stats.visited) * 100}%` }}
-                           />
-                         </div>
-                       </div>
-                     </div>
-                   ))}
-                 </div>
-               ) : (
-                 <p className="text-sm text-slate-400 italic text-center py-4">快去打卡你的第一家餐厅吧！</p>
-               )}
-             </div>
-
-             {/* Badge Section (Fun) */}
-             <div className="bg-gradient-to-br from-slate-900 to-slate-800 p-6 rounded-2xl text-white shadow-lg">
-               <h3 className="font-bold mb-2">美食家等级</h3>
-               <p className="text-sm text-slate-300 mb-4">
-                 {stats.visited < 5 ? "新手美食家 - 旅程才刚刚开始！" : 
-                  stats.visited < 20 ? "资深吃货 - 你的味蕾正在觉醒。" : 
-                  "悉尼食神 - 你是这里的美食传说！"}
-               </p>
-               <div className="flex gap-2">
-                 {[1, 5, 10, 20, 50].map(milestone => (
-                   <div 
-                     key={milestone}
-                     className={`h-8 flex-1 rounded-lg flex items-center justify-center text-xs font-bold border ${
-                       stats.visited >= milestone 
-                         ? 'bg-amber-400 border-amber-400 text-slate-900' 
-                         : 'bg-transparent border-slate-600 text-slate-600'
-                     }`}
-                   >
-                     {milestone}
-                   </div>
-                 ))}
-               </div>
-             </div>
-          </div>
-        )}
-      </main>
-
-      <RestaurantModal />
-    </div>
   );
 }
