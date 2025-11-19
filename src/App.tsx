@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 // FIX 1: 将 Map 重命名为 MapIcon，避免与 JS 全局 Map 对象冲突
-import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronRight, Award, ExternalLink, Map as MapIcon, Filter, Camera, Share2, Image as ImageIcon, Heart, Trash2, SortAsc, Download, Upload, Zap, RefreshCw } from 'lucide-react';
+import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronRight, Award, ExternalLink, Map as MapIcon, Filter, Camera, Share2, Image as ImageIcon, Heart, Trash2, SortAsc, Download, Upload, Zap, RefreshCw, Plus, Globe } from 'lucide-react';
 import { db, auth, isFirebaseConfigured } from './lib/firebase';
 // FIX 2: 添加 updateDoc 导入
 import { collection, onSnapshot, doc, setDoc, getDocs, updateDoc } from 'firebase/firestore';
@@ -10,13 +10,13 @@ interface Restaurant {
   id: number;
   name: string;
   location: string;
-  suburb?: string; // 新增
+  suburb?: string;
   region: string;
   cuisine: string;
   priceTier: string;
   imageCategory: string;
-  imageUrl?: string; // 新增：官方图链接
-  sourceUrl?: string; // 新增：来源链接
+  imageUrl?: string;
+  sourceUrl?: string;
 
   // 用户数据
   visited: boolean;
@@ -26,6 +26,8 @@ interface Restaurant {
   userDishes: string;
   userPhotos: string[];
   visitedDate: string | null;
+  
+  isCustom?: boolean; // 标记是否为手动添加
 }
 
 interface Stats {
@@ -37,7 +39,7 @@ interface Stats {
   topCuisines: [string, number][];
 }
 
-// --- 2. 扩充数据源 (100+ 餐厅模拟大列表) ---
+// --- 2. 扩充数据源 (每次你想加新餐厅，就在这里加，会自动同步) ---
 const BASE_DATA: Partial<Restaurant>[] = [
   // --- Sydney Icons ---
   { id: 1, name: "Bennelong", location: "Sydney Opera House", suburb: "Sydney", region: "Sydney CBD", cuisine: "Modern Australian", priceTier: "$$$$", imageCategory: "Modern Australian" },
@@ -93,7 +95,6 @@ const convertImageToBase64 = (file: File): Promise<string> => {
       img.src = event.target?.result as string;
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        // 强力压缩以适应 Firestore Document 限制 (1MB)
         const MAX_WIDTH = 600; 
         const scaleSize = MAX_WIDTH / img.width;
         canvas.width = MAX_WIDTH;
@@ -152,7 +153,68 @@ const StarRating = ({ rating, setRating, readonly = false, size = 'md' }: { rati
   );
 };
 
-// --- Modal 组件 ---
+// --- 新增：手动添加餐厅 Modal ---
+const AddRestaurantModal = ({ onClose, onAdd }: { onClose: () => void, onAdd: (r: Partial<Restaurant>) => void }) => {
+    const [formData, setFormData] = useState({ name: '', location: '', cuisine: 'Modern Australian', priceTier: '$$' });
+    
+    const handleSubmit = () => {
+        if(!formData.name) return alert("请输入餐厅名称");
+        onAdd({
+            ...formData,
+            region: 'Custom Added', // 默认区域
+            imageCategory: formData.cuisine,
+            id: Date.now(), // 生成唯一ID
+            visited: false,
+            isCustom: true
+        });
+        onClose();
+    };
+
+    return (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl animate-in fade-in zoom-in duration-200">
+                <h3 className="text-xl font-bold mb-4 flex items-center gap-2"><Plus size={24} className="text-amber-500"/> 添加新餐厅</h3>
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1">餐厅名称</label>
+                        <input type="text" className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 focus:ring-2 focus:ring-amber-400 outline-none" placeholder="例如: Sunday Kitchen" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
+                    </div>
+                    <div>
+                        <label className="block text-xs font-bold text-slate-400 uppercase mb-1">地点 / 区域</label>
+                        <input type="text" className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 focus:ring-2 focus:ring-amber-400 outline-none" placeholder="例如: Potts Point" value={formData.location} onChange={e => setFormData({...formData, location: e.target.value})} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div>
+                             <label className="block text-xs font-bold text-slate-400 uppercase mb-1">菜系</label>
+                             <select className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 outline-none" value={formData.cuisine} onChange={e => setFormData({...formData, cuisine: e.target.value})}>
+                                 <option value="Modern Australian">澳洲现代菜</option>
+                                 <option value="Asian">亚洲菜 (中/泰/日)</option>
+                                 <option value="Italian">意大利菜</option>
+                                 <option value="French">法餐</option>
+                                 <option value="Seafood">海鲜</option>
+                                 <option value="Steakhouse">牛排/烧烤</option>
+                             </select>
+                        </div>
+                         <div>
+                             <label className="block text-xs font-bold text-slate-400 uppercase mb-1">价格等级</label>
+                             <select className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 outline-none" value={formData.priceTier} onChange={e => setFormData({...formData, priceTier: e.target.value})}>
+                                 <option value="$">$ (便宜)</option>
+                                 <option value="$$">$$ (适中)</option>
+                                 <option value="$$$">$$$ (小贵)</option>
+                                 <option value="$$$$">$$$$ (奢华)</option>
+                             </select>
+                        </div>
+                    </div>
+                    <button onClick={handleSubmit} className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold mt-4 hover:bg-slate-800 transition-colors">确认添加</button>
+                    <button onClick={onClose} className="w-full py-3 text-slate-400 font-medium text-sm hover:text-slate-600">取消</button>
+                </div>
+            </div>
+        </div>
+    )
+}
+
+
+// --- Modal 组件 (增加了 小红书 和 TripAdvisor) ---
 const RestaurantModal = ({ 
   r, 
   onClose, 
@@ -171,6 +233,10 @@ const RestaurantModal = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(r.name + ' ' + r.location + ' NSW')}`;
+  // 新增：小红书搜索链接
+  const xhsUrl = `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent('悉尼 ' + r.name)}`;
+  // 新增：TripAdvisor 搜索链接
+  const tripAdvisorUrl = `https://www.tripadvisor.com/Search?q=${encodeURIComponent(r.name + ' ' + r.location)}&geo=1&ssrc=e`;
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -227,12 +293,22 @@ const RestaurantModal = ({
           </div>
 
           <div className="p-6 space-y-6">
-             <div className="flex gap-3">
-                <a href={googleMapsUrl} target="_blank" rel="noopener noreferrer" className="flex-1 bg-white border border-slate-200 py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50">
-                  {/* FIX 3: 使用重命名后的 MapIcon */}
-                  <MapIcon size={16} /> 导航
+             {/* Action Buttons */}
+             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <a href={googleMapsUrl} target="_blank" rel="noopener noreferrer" className="bg-white border border-slate-200 py-2.5 rounded-xl flex flex-col items-center justify-center gap-1 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50">
+                  <MapIcon size={18} className="text-blue-500"/> 导航
                 </a>
-                <button onClick={() => window.open(`https://www.google.com/search?q=${encodeURIComponent(r.name + ' menu')}`, '_blank')} className="flex-1 bg-white border border-slate-200 py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"><Utensils size={16} /> 菜单</button>
+                <button onClick={() => window.open(`https://www.google.com/search?q=${encodeURIComponent(r.name + ' menu')}`, '_blank')} className="bg-white border border-slate-200 py-2.5 rounded-xl flex flex-col items-center justify-center gap-1 text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50">
+                  <Utensils size={18} className="text-amber-600"/> 菜单
+                </button>
+                {/* 小红书按钮 */}
+                <a href={xhsUrl} target="_blank" rel="noopener noreferrer" className="bg-red-50 border border-red-100 py-2.5 rounded-xl flex flex-col items-center justify-center gap-1 text-xs font-bold text-red-600 shadow-sm hover:bg-red-100">
+                  <Heart size={18} className="fill-red-600"/> 小红书搜菜
+                </a>
+                {/* TripAdvisor 按钮 */}
+                <a href={tripAdvisorUrl} target="_blank" rel="noopener noreferrer" className="bg-green-50 border border-green-100 py-2.5 rounded-xl flex flex-col items-center justify-center gap-1 text-xs font-bold text-green-700 shadow-sm hover:bg-green-100">
+                  <Globe size={18} className="text-green-600"/> 查评分
+                </a>
              </div>
 
              {!r.visited && !isEditing ? (
@@ -305,6 +381,29 @@ export default function NSWFoodTracker() {
   // 初始化逻辑：优先使用 Firebase，否则使用 LocalStorage
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showAddModal, setShowAddModal] = useState(false);
+
+  // --- 智能同步逻辑 (Smart Sync) ---
+  const checkForNewCodeData = async (existingData: Restaurant[]) => {
+     if (!db || !isFirebaseConfigured) return;
+     
+     const existingIds = new Set(existingData.map(r => r.id));
+     const missingRestaurants = BASE_DATA.filter(r => r.id && !existingIds.has(r.id));
+
+     if (missingRestaurants.length > 0) {
+         console.log(`Found ${missingRestaurants.length} new restaurants in code. Syncing to Cloud...`);
+         const batchPromises = missingRestaurants.map(r => {
+             const completeData = {
+                ...r,
+                visited: false, userRating: 0, userPrice: '', userNotes: '', userDishes: '', userPhotos: [], visitedDate: null
+             };
+             // 写入云端
+             return setDoc(doc(db, "restaurants", String(r.id)), completeData);
+         });
+         await Promise.all(batchPromises);
+         console.log("Sync Complete!");
+     }
+  };
 
   // 监听数据源
   useEffect(() => {
@@ -318,6 +417,9 @@ export default function NSWFoodTracker() {
           const cloudData = snapshot.docs.map(doc => ({ ...doc.data(), id: Number(doc.id) } as Restaurant));
           setRestaurants(cloudData);
           setLoading(false);
+          
+          // 每次数据加载完，顺便检查一下有没有代码里新加的餐厅需要补进去
+          checkForNewCodeData(cloudData);
         }
       });
       return () => unsubscribe();
@@ -434,6 +536,20 @@ export default function NSWFoodTracker() {
     
     setActiveRestaurant(prev => prev && prev.id === id ? { ...prev, ...newData, visited: true } : prev);
   };
+  
+  // 新增：处理手动添加餐厅
+  const handleAddCustomRestaurant = async (newR: Partial<Restaurant>) => {
+      const completeR = {
+          ...newR,
+          userRating: 0, userPrice: '', userNotes: '', userDishes: '', userPhotos: [], visitedDate: null
+      } as Restaurant;
+      
+      if (isFirebaseConfigured && db) {
+          await setDoc(doc(db, "restaurants", String(completeR.id)), completeR);
+      } else {
+          setRestaurants([...restaurants, completeR]);
+      }
+  }
 
   const handleSurpriseMe = () => {
     const pool = filteredList.filter(r => !r.visited);
@@ -503,13 +619,16 @@ export default function NSWFoodTracker() {
           <>
             <div className="sticky top-[68px] z-30 bg-slate-100/95 backdrop-blur-sm pb-4 space-y-3 pt-2">
               <div className="flex flex-wrap gap-2">
-                <div className="relative flex-1 min-w-[200px]">
+                <div className="relative flex-1 min-w-[180px]">
                   <Search className="absolute left-3.5 top-3 text-slate-400" size={18} />
                   <input type="text" placeholder="搜餐厅、菜系..." className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 shadow-sm rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-400 transition-all" value={filter} onChange={(e) => setFilter(e.target.value)} />
                 </div>
-                <button onClick={handleSurpriseMe} className="px-3 rounded-xl flex items-center gap-2 text-sm font-bold transition-all border shadow-sm bg-white text-slate-600 border-slate-200 hover:bg-slate-50">🎲 <span className="hidden sm:inline">今天吃啥</span></button>
-                <button onClick={() => setSortBy(prev => prev === 'default' ? 'rating' : prev === 'rating' ? 'price' : 'default')} className={`px-3 rounded-xl flex items-center gap-2 text-sm font-bold transition-all border shadow-sm ${sortBy !== 'default' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200'}`}><SortAsc size={18} /><span className="hidden sm:inline">{sortBy === 'default' ? '默认' : sortBy === 'rating' ? '评分' : '价格'}</span></button>
-                <button onClick={() => setShowVisitedOnly(!showVisitedOnly)} className={`px-3 rounded-xl flex items-center gap-2 text-sm font-bold transition-all border shadow-sm ${showVisitedOnly ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-slate-600 border-slate-200'}`}><CheckCircle size={18} /><span className="hidden sm:inline">已吃</span></button>
+                {/* 添加餐厅按钮 */}
+                <button onClick={() => setShowAddModal(true)} className="px-3 rounded-xl flex items-center gap-2 text-sm font-bold transition-all border shadow-sm bg-slate-900 text-white border-slate-900 hover:bg-slate-800"><Plus size={18} /><span className="hidden sm:inline">添加餐厅</span></button>
+                
+                <button onClick={handleSurpriseMe} className="px-3 rounded-xl flex items-center gap-2 text-sm font-bold transition-all border shadow-sm bg-white text-slate-600 border-slate-200 hover:bg-slate-50">🎲</button>
+                <button onClick={() => setSortBy(prev => prev === 'default' ? 'rating' : prev === 'rating' ? 'price' : 'default')} className={`px-3 rounded-xl flex items-center gap-2 text-sm font-bold transition-all border shadow-sm ${sortBy !== 'default' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200'}`}><SortAsc size={18} /></button>
+                <button onClick={() => setShowVisitedOnly(!showVisitedOnly)} className={`px-3 rounded-xl flex items-center gap-2 text-sm font-bold transition-all border shadow-sm ${showVisitedOnly ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-slate-600 border-slate-200'}`}><CheckCircle size={18} /></button>
               </div>
 
               <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0">
@@ -598,6 +717,7 @@ export default function NSWFoodTracker() {
         )}
       </main>
       {activeRestaurant && <RestaurantModal r={activeRestaurant} onClose={() => setActiveRestaurant(null)} onUpdate={handleUpdateRestaurant} />}
+      {showAddModal && <AddRestaurantModal onClose={() => setShowAddModal(false)} onAdd={handleAddCustomRestaurant} />}
     </div>
   );
 }
