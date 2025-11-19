@@ -1,8 +1,36 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Search, MapPin, CheckCircle, Circle, Utensils, DollarSign, Star, BarChart3, Filter, Plus, X, ChevronRight, Award } from 'lucide-react';
+import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronRight, Award } from 'lucide-react';
+
+// --- 类型定义 ---
+interface Restaurant {
+  id: number;
+  name: string;
+  location: string;
+  cuisine: string;
+  priceTier: string;
+  visited?: boolean;
+  userRating?: number;
+  userPrice?: string | number;
+  userNotes?: string;
+  visitedDate?: string | null;
+}
+
+interface Stats {
+  visited: number;
+  total: number;
+  percentage: number;
+  totalSpent: number;
+  topCuisines: [string, number][];
+}
+
+interface StarRatingProps {
+  rating: number;
+  setRating: (rating: number) => void;
+  readonly?: boolean;
+}
 
 // --- 预置数据：基于 Good Food Gift Card NSW 搜索结果 ---
-const INITIAL_RESTAURANTS = [
+const INITIAL_RESTAURANTS: Restaurant[] = [
   { id: 1, name: "Bennelong", location: "Sydney Opera House", cuisine: "Modern Australian", priceTier: "$$$$" },
   { id: 2, name: "Quay", location: "The Rocks", cuisine: "Modern Australian", priceTier: "$$$$" },
   { id: 3, name: "Firedoor", location: "Surry Hills", cuisine: "Steak/Grill", priceTier: "$$$$" },
@@ -46,7 +74,7 @@ const INITIAL_RESTAURANTS = [
 ];
 
 // --- 组件：星星评分 ---
-const StarRating = ({ rating, setRating, readonly = false }) => {
+const StarRating: React.FC<StarRatingProps> = ({ rating, setRating, readonly = false }) => {
   return (
     <div className="flex gap-1">
       {[1, 2, 3, 4, 5].map((star) => (
@@ -54,6 +82,7 @@ const StarRating = ({ rating, setRating, readonly = false }) => {
           key={star}
           onClick={() => !readonly && setRating(star)}
           disabled={readonly}
+          type="button"
           className={`focus:outline-none transition-transform ${!readonly && 'active:scale-125 hover:scale-110'}`}
         >
           <Star
@@ -71,7 +100,7 @@ const StarRating = ({ rating, setRating, readonly = false }) => {
 // --- 主应用 ---
 export default function NSWFoodTracker() {
   // 状态管理
-  const [restaurants, setRestaurants] = useState(() => {
+  const [restaurants, setRestaurants] = useState<Restaurant[]>(() => {
     const saved = localStorage.getItem('nsw_food_list');
     return saved ? JSON.parse(saved) : INITIAL_RESTAURANTS.map(r => ({
       ...r,
@@ -83,11 +112,11 @@ export default function NSWFoodTracker() {
     }));
   });
   
-  const [view, setView] = useState('list'); // 'list' or 'stats'
-  const [filter, setFilter] = useState('');
-  const [selectedCuisine, setSelectedCuisine] = useState('All');
-  const [activeRestaurant, setActiveRestaurant] = useState(null); // For modal
-  const [isEditing, setIsEditing] = useState(false);
+  const [view, setView] = useState<'list' | 'stats'>('list');
+  const [filter, setFilter] = useState<string>('');
+  const [selectedCuisine, setSelectedCuisine] = useState<string>('All');
+  const [activeRestaurant, setActiveRestaurant] = useState<Restaurant | null>(null);
+  const [isEditing, setIsEditing] = useState<boolean>(false);
 
   // 持久化存储
   useEffect(() => {
@@ -95,13 +124,13 @@ export default function NSWFoodTracker() {
   }, [restaurants]);
 
   // 统计数据
-  const stats = useMemo(() => {
+  const stats = useMemo<Stats>(() => {
     const visited = restaurants.filter(r => r.visited);
     const total = restaurants.length;
-    const percentage = Math.round((visited.length / total) * 100);
+    const percentage = total > 0 ? Math.round((visited.length / total) * 100) : 0;
     const totalSpent = visited.reduce((acc, curr) => acc + (Number(curr.userPrice) || 0), 0);
     
-    const cuisineCounts = visited.reduce((acc, curr) => {
+    const cuisineCounts = visited.reduce<Record<string, number>>((acc, curr) => {
       acc[curr.cuisine] = (acc[curr.cuisine] || 0) + 1;
       return acc;
     }, {});
@@ -125,7 +154,7 @@ export default function NSWFoodTracker() {
   });
 
   // 处理打卡/更新
-  const handleUpdateRestaurant = (id, data) => {
+  const handleUpdateRestaurant = (id: number, data: Partial<Restaurant>) => {
     setRestaurants(prev => prev.map(r => {
       if (r.id === id) {
         return { ...r, ...data, visited: true, visitedDate: r.visitedDate || new Date().toISOString().split('T')[0] };
@@ -141,10 +170,14 @@ export default function NSWFoodTracker() {
     if (!activeRestaurant) return null;
     const r = activeRestaurant;
     
-    // Form state
-    const [notes, setNotes] = useState(r.userNotes || '');
-    const [price, setPrice] = useState(r.userPrice || '');
-    const [rating, setRating] = useState(r.userRating || 0);
+    // Form state (inner component hooks need to be at top level of component)
+    // We are rendering this conditionally, which is generally okay if the condition is stable,
+    // but ideally Modal should be a separate component or always rendered but hidden.
+    // For this simple file, we will invoke hooks inside this sub-function component.
+    
+    const [notes, setNotes] = useState<string>(r.userNotes || '');
+    const [price, setPrice] = useState<string | number>(r.userPrice || '');
+    const [rating, setRating] = useState<number>(r.userRating || 0);
 
     return (
       <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
@@ -154,6 +187,7 @@ export default function NSWFoodTracker() {
             <button 
               onClick={() => setActiveRestaurant(null)}
               className="absolute top-4 right-4 text-white/70 hover:text-white bg-white/10 p-1 rounded-full"
+              type="button"
             >
               <X size={20} />
             </button>
@@ -177,6 +211,7 @@ export default function NSWFoodTracker() {
                 <button 
                   onClick={() => setIsEditing(true)}
                   className="w-full py-3 bg-slate-900 text-white rounded-xl font-medium hover:bg-slate-800 transition-colors flex items-center justify-center gap-2"
+                  type="button"
                 >
                   <CheckCircle size={18} />
                   打卡这家店
@@ -187,7 +222,7 @@ export default function NSWFoodTracker() {
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-2">味道评分</label>
                   <div className="flex justify-center p-4 bg-slate-50 rounded-xl border border-slate-100">
-                    <StarRating rating={rating} setRating={setRating} readonly={!isEditing && r.visited} />
+                    <StarRating rating={rating} setRating={setRating} readonly={!isEditing && !!r.visited} />
                   </div>
                 </div>
 
@@ -199,7 +234,7 @@ export default function NSWFoodTracker() {
                       type="number" 
                       value={price}
                       onChange={(e) => setPrice(e.target.value)}
-                      readOnly={!isEditing && r.visited}
+                      readOnly={!isEditing && !!r.visited}
                       placeholder="例如: 80"
                       className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-400"
                     />
@@ -211,7 +246,7 @@ export default function NSWFoodTracker() {
                   <textarea 
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
-                    readOnly={!isEditing && r.visited}
+                    readOnly={!isEditing && !!r.visited}
                     placeholder="必点菜是什么？环境怎么样？"
                     className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl h-32 focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none"
                   />
@@ -221,6 +256,7 @@ export default function NSWFoodTracker() {
                   <button 
                     onClick={() => handleUpdateRestaurant(r.id, { userRating: rating, userPrice: price, userNotes: notes })}
                     className="w-full py-3 bg-amber-500 text-white rounded-xl font-bold shadow-lg shadow-amber-500/30 hover:bg-amber-600 transition-all"
+                    type="button"
                   >
                     保存记录
                   </button>
@@ -230,6 +266,7 @@ export default function NSWFoodTracker() {
                    <button 
                    onClick={() => setIsEditing(true)}
                    className="w-full py-2 text-slate-500 text-sm hover:text-slate-800 underline decoration-dotted"
+                   type="button"
                  >
                    修改记录
                  </button>
@@ -273,12 +310,14 @@ export default function NSWFoodTracker() {
           <button 
             onClick={() => setView('list')}
             className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${view === 'list' ? 'bg-white shadow text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}
+            type="button"
           >
             餐厅清单
           </button>
           <button 
             onClick={() => setView('stats')}
             className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${view === 'stats' ? 'bg-white shadow text-slate-900' : 'text-slate-500 hover:text-slate-700'}`}
+            type="button"
           >
             我的战绩
           </button>
@@ -308,6 +347,7 @@ export default function NSWFoodTracker() {
                         ? 'bg-slate-800 text-white border-slate-800' 
                         : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
                     }`}
+                    type="button"
                   >
                     {c}
                   </button>
@@ -347,7 +387,7 @@ export default function NSWFoodTracker() {
                     
                     <div className="pl-4 flex flex-col items-end gap-1">
                       {r.visited ? (
-                         r.userRating > 0 ? (
+                         (r.userRating || 0) > 0 ? (
                            <div className="flex text-amber-400">
                              {[...Array(r.userRating)].map((_, i) => <Star key={i} size={12} fill="currentColor" />)}
                            </div>
