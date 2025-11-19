@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronRight, Award, ExternalLink, Map, Filter, Camera, Share2, Image as ImageIcon, Heart, Trash2, SortAsc, Download, Upload, Zap, RefreshCw } from 'lucide-react';
+// FIX 1: 将 Map 重命名为 MapIcon，避免与 JS 全局 Map 对象冲突
+import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronRight, Award, ExternalLink, Map as MapIcon, Filter, Camera, Share2, Image as ImageIcon, Heart, Trash2, SortAsc, Download, Upload, Zap, RefreshCw } from 'lucide-react';
 import { db, auth, isFirebaseConfigured } from './lib/firebase';
-import { collection, onSnapshot, doc, setDoc, getDocs } from 'firebase/firestore';
+// FIX 2: 添加 updateDoc 导入
+import { collection, onSnapshot, doc, setDoc, getDocs, updateDoc } from 'firebase/firestore';
 
 // --- 1. 类型定义 (升级版) ---
 interface Restaurant {
@@ -36,7 +38,6 @@ interface Stats {
 }
 
 // --- 2. 扩充数据源 (100+ 餐厅模拟大列表) ---
-// 实际项目中，这部分可以单独放在一个 json 文件里导入
 const BASE_DATA: Partial<Restaurant>[] = [
   // --- Sydney Icons ---
   { id: 1, name: "Bennelong", location: "Sydney Opera House", suburb: "Sydney", region: "Sydney CBD", cuisine: "Modern Australian", priceTier: "$$$$", imageCategory: "Modern Australian" },
@@ -227,7 +228,10 @@ const RestaurantModal = ({
 
           <div className="p-6 space-y-6">
              <div className="flex gap-3">
-                <a href={googleMapsUrl} target="_blank" rel="noopener noreferrer" className="flex-1 bg-white border border-slate-200 py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"><Map size={16} /> 导航</a>
+                <a href={googleMapsUrl} target="_blank" rel="noopener noreferrer" className="flex-1 bg-white border border-slate-200 py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50">
+                  {/* FIX 3: 使用重命名后的 MapIcon */}
+                  <MapIcon size={16} /> 导航
+                </a>
                 <button onClick={() => window.open(`https://www.google.com/search?q=${encodeURIComponent(r.name + ' menu')}`, '_blank')} className="flex-1 bg-white border border-slate-200 py-3 rounded-xl flex items-center justify-center gap-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"><Utensils size={16} /> 菜单</button>
              </div>
 
@@ -386,6 +390,7 @@ export default function NSWFoodTracker() {
 
   // 区域统计
   const regionStats = useMemo(() => {
+    // FIX 1: 现在 Map 引用的是 JS 全局 Map 对象，不再是图标组件
     const map = new Map<string, { total: number; visited: number }>();
     restaurants.forEach((r) => {
       const key = r.region || 'Other';
@@ -562,7 +567,10 @@ export default function NSWFoodTracker() {
 
              {/* 区域统计进度 */}
              <div className="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm">
-                <h3 className="font-bold text-slate-900 mb-6 flex items-center gap-2 text-lg"><MapPin size={20} className="text-emerald-500" /> 按区域打卡进度</h3>
+                <h3 className="font-bold text-slate-900 mb-6 flex items-center gap-2 text-lg">
+                    {/* FIX 3: 使用重命名后的 MapIcon */}
+                    <MapIcon size={20} className="text-emerald-500" /> 按区域打卡进度
+                </h3>
                 <div className="space-y-4">
                     {regionStats.map(r => (
                         <div key={r.region} className="space-y-1">
