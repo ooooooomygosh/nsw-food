@@ -285,7 +285,8 @@ export default function NSWFoodTracker() {
     const total = restaurants.length;
     const percentage = total > 0 ? Math.round((visited.length / total) * 100) : 0;
     const totalSpent = visited.reduce((acc, curr) => acc + (Number(curr.userPrice) || 0), 0);
-    const avgRating = visited.length > 0 ? (visited.reduce((acc, curr) => acc + curr.userRating, 0) / visited.length).toFixed(1) : "0.0";
+    // [修复] 添加了 || 0 来处理 undefined
+    const avgRating = visited.length > 0 ? (visited.reduce((acc, curr) => acc + (curr.userRating || 0), 0) / visited.length).toFixed(1) : "0.0";
     const cuisineCounts = visited.reduce<Record<string, number>>((acc, curr) => { acc[curr.cuisine] = (acc[curr.cuisine] || 0) + 1; return acc; }, {});
     const topCuisines = Object.entries(cuisineCounts).sort(([,a], [,b]) => b - a).slice(0, 3);
     return { visited: visited.length, total, percentage, totalSpent, topCuisines, averageRating: avgRating };
@@ -302,7 +303,8 @@ export default function NSWFoodTracker() {
       const matchesVisited = showVisitedOnly ? r.visited : true;
       return matchesSearch && matchesRegion && matchesCuisine && matchesVisited;
     });
-    if (sortBy === 'rating') res.sort((a, b) => b.userRating - a.userRating);
+    // [修复] 添加了 || 0 来处理 undefined
+    if (sortBy === 'rating') res.sort((a, b) => (b.userRating || 0) - (a.userRating || 0));
     else if (sortBy === 'price') res.sort((a, b) => (Number(b.userPrice) || 0) - (Number(a.userPrice) || 0));
     return res;
   }, [restaurants, filter, selectedRegion, selectedCuisine, showVisitedOnly, sortBy]);
@@ -407,7 +409,8 @@ export default function NSWFoodTracker() {
                         <h3 className="font-serif font-bold text-xl leading-tight mb-1 text-shadow-sm truncate">{r.name}</h3>
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-1.5 text-xs text-slate-300 font-medium"><span>{r.cuisine}</span><span className="w-1 h-1 rounded-full bg-slate-400"/><span>{r.priceTier}</span></div>
-                          {r.userRating > 0 && <div className="flex items-center gap-1 bg-white/10 backdrop-blur-sm px-2 py-0.5 rounded-full"><Star size={12} className="fill-amber-400 text-amber-400" /><span className="text-xs font-bold text-amber-400">{r.userRating}</span></div>}
+                          {/* [修复] 添加了 || 0 来处理 undefined */}
+                          {(r.userRating || 0) > 0 && <div className="flex items-center gap-1 bg-white/10 backdrop-blur-sm px-2 py-0.5 rounded-full"><Star size={12} className="fill-amber-400 text-amber-400" /><span className="text-xs font-bold text-amber-400">{r.userRating}</span></div>}
                         </div>
                       </div>
                     </div>
@@ -422,7 +425,7 @@ export default function NSWFoodTracker() {
           <div className="h-full w-full rounded-2xl overflow-hidden border border-slate-200 shadow-inner relative">
              <MapContainer center={[-33.8688, 151.2093]} zoom={13} style={{ height: '100%', width: '100%' }}>
                 <TileLayer
-                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                  attribution='© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                   url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 />
                 {filteredList.filter(r => r.lat && r.lng).map(r => (
