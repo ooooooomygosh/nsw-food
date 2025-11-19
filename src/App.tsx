@@ -1,19 +1,18 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronRight, Award } from 'lucide-react';
 
-// --- 1. 定义数据结构接口 (Interfaces) ---
-// 告诉 TypeScript 我们的餐厅数据长什么样
+// --- 类型定义 (Type Definitions) ---
 interface Restaurant {
   id: number;
   name: string;
   location: string;
   cuisine: string;
   priceTier: string;
-  visited: boolean;       // 必填，因为初始化时我们映射了默认值
-  userRating: number;     // 必填
-  userPrice: string | number; // 可是字符串或数字
-  userNotes: string;      // 必填
-  visitedDate: string | null; // 可能是 null
+  visited: boolean;
+  userRating: number;
+  userPrice: string | number;
+  userNotes: string;
+  visitedDate: string | null;
 }
 
 interface Stats {
@@ -31,7 +30,6 @@ interface StarRatingProps {
 }
 
 // --- 预置数据 ---
-// 使用 Partial 表示初始数据只包含部分字段，后面会被补全
 const INITIAL_RESTAURANTS: Partial<Restaurant>[] = [
   { id: 1, name: "Bennelong", location: "Sydney Opera House", cuisine: "Modern Australian", priceTier: "$$$$" },
   { id: 2, name: "Quay", location: "The Rocks", cuisine: "Modern Australian", priceTier: "$$$$" },
@@ -76,7 +74,7 @@ const INITIAL_RESTAURANTS: Partial<Restaurant>[] = [
 ];
 
 // --- 组件：星星评分 ---
-const StarRating: React.FC<StarRatingProps> = ({ rating, setRating, readonly = false }) => {
+const StarRating = ({ rating, setRating, readonly = false }: StarRatingProps) => {
   return (
     <div className="flex gap-1">
       {[1, 2, 3, 4, 5].map((star) => (
@@ -99,14 +97,127 @@ const StarRating: React.FC<StarRatingProps> = ({ rating, setRating, readonly = f
   );
 };
 
+// --- 模态框内容组件 (分离以解决 Hook 问题) ---
+interface ModalContentProps {
+  r: Restaurant;
+  onClose: () => void;
+  onUpdate: (id: number, data: Partial<Restaurant>) => void;
+  isEditingInitial: boolean;
+  setIsEditingParent: (val: boolean) => void;
+}
+
+const RestaurantModalContent = ({ r, onClose, onUpdate, isEditingInitial, setIsEditingParent }: ModalContentProps) => {
+  const [notes, setNotes] = useState<string>(r.userNotes || '');
+  const [price, setPrice] = useState<string | number>(r.userPrice || '');
+  const [rating, setRating] = useState<number>(r.userRating || 0);
+  const isEditing = isEditingInitial;
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+      <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="bg-slate-900 p-6 text-white relative">
+          <button 
+            onClick={onClose}
+            className="absolute top-4 right-4 text-white/70 hover:text-white bg-white/10 p-1 rounded-full"
+            type="button"
+          >
+            <X size={20} />
+          </button>
+          <div className="text-xs font-bold uppercase tracking-wider text-amber-400 mb-1">{r.cuisine}</div>
+          <h2 className="text-3xl font-serif font-bold leading-tight mb-2">{r.name}</h2>
+          <div className="flex items-center gap-2 text-sm text-slate-300">
+            <MapPin size={14} />
+            {r.location}
+          </div>
+        </div>
+
+        <div className="p-6 overflow-y-auto">
+          {!r.visited && !isEditing ? (
+            <div className="text-center py-8">
+              <div className="bg-slate-100 rounded-full w-20 h-20 flex items-center justify-center mx-auto mb-4">
+                <Utensils className="text-slate-400" size={32} />
+              </div>
+              <h3 className="text-lg font-semibold text-slate-800 mb-2">还没吃过这家店？</h3>
+              <p className="text-slate-500 mb-6">准备好去品尝了吗？点击下方按钮开始记录你的体验。</p>
+              <button 
+                onClick={() => setIsEditingParent(true)}
+                className="w-full py-3 bg-slate-900 text-white rounded-xl font-medium hover:bg-slate-800 transition-colors flex items-center justify-center gap-2"
+                type="button"
+              >
+                <CheckCircle size={18} />
+                打卡这家店
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">味道评分</label>
+                <div className="flex justify-center p-4 bg-slate-50 rounded-xl border border-slate-100">
+                  <StarRating rating={rating} setRating={setRating} readonly={!isEditing && r.visited} />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">人均消费 ($)</label>
+                <div className="relative">
+                  <DollarSign className="absolute left-3 top-3 text-slate-400" size={16} />
+                  <input 
+                    type="number" 
+                    value={price}
+                    onChange={(e) => setPrice(e.target.value)}
+                    readOnly={!isEditing && r.visited}
+                    placeholder="例如: 80"
+                    className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2">美食笔记</label>
+                <textarea 
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  readOnly={!isEditing && r.visited}
+                  placeholder="必点菜是什么？环境怎么样？"
+                  className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl h-32 focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none"
+                />
+              </div>
+
+              {(isEditing || !r.visited) && (
+                <button 
+                  onClick={() => onUpdate(r.id, { userRating: rating, userPrice: price, userNotes: notes })}
+                  className="w-full py-3 bg-amber-500 text-white rounded-xl font-bold shadow-lg shadow-amber-500/30 hover:bg-amber-600 transition-all"
+                  type="button"
+                >
+                  保存记录
+                </button>
+              )}
+              
+              {!isEditing && r.visited && (
+                 <button 
+                 onClick={() => setIsEditingParent(true)}
+                 className="w-full py-2 text-slate-500 text-sm hover:text-slate-800 underline decoration-dotted"
+                 type="button"
+               >
+                 修改记录
+               </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // --- 主应用 ---
 export default function NSWFoodTracker() {
-  // 2. 状态泛型：明确告诉 TS这里存放的是 Restaurant 数组
+  // 状态管理
   const [restaurants, setRestaurants] = useState<Restaurant[]>(() => {
     const saved = localStorage.getItem('nsw_food_list');
     if (saved) {
       return JSON.parse(saved);
-    } 
+    }
     // 初始化数据时补全所有字段
     return INITIAL_RESTAURANTS.map(r => ({
       ...r,
@@ -121,23 +232,21 @@ export default function NSWFoodTracker() {
   const [view, setView] = useState<'list' | 'stats'>('list');
   const [filter, setFilter] = useState<string>('');
   const [selectedCuisine, setSelectedCuisine] = useState<string>('All');
-  
-  // 3. 关键修复：告诉 TS activeRestaurant 可能是 null，也可能是 Restaurant 对象
   const [activeRestaurant, setActiveRestaurant] = useState<Restaurant | null>(null);
   const [isEditing, setIsEditing] = useState<boolean>(false);
 
+  // 持久化存储
   useEffect(() => {
     localStorage.setItem('nsw_food_list', JSON.stringify(restaurants));
   }, [restaurants]);
 
-  // 统计数据类型定义
+  // 统计数据
   const stats = useMemo<Stats>(() => {
     const visited = restaurants.filter(r => r.visited);
     const total = restaurants.length;
     const percentage = total > 0 ? Math.round((visited.length / total) * 100) : 0;
     const totalSpent = visited.reduce((acc, curr) => acc + (Number(curr.userPrice) || 0), 0);
     
-    // 4. Reduce 类型修复：显式声明 accumulator 是一个字符串键数字值的对象
     const cuisineCounts = visited.reduce<Record<string, number>>((acc, curr) => {
       acc[curr.cuisine] = (acc[curr.cuisine] || 0) + 1;
       return acc;
@@ -159,7 +268,6 @@ export default function NSWFoodTracker() {
     return matchesSearch && matchesCuisine;
   });
 
-  // 参数类型定义
   const handleUpdateRestaurant = (id: number, data: Partial<Restaurant>) => {
     setRestaurants(prev => prev.map(r => {
       if (r.id === id) {
@@ -171,21 +279,9 @@ export default function NSWFoodTracker() {
     setIsEditing(false);
   };
 
-  // 模态框组件
-  const RestaurantModal = () => {
-    if (!activeRestaurant) return null;
-    const r = activeRestaurant;
-    
-    // 在组件内部定义 Hook 是 React 的规则，这里我们使用简单的条件渲染
-    // 注意：在大型应用中通常建议把 Modal 拆分为独立组件以避免 Hook 规则问题
-    // 这里为了保持单文件，我们使用一个特定技巧：即使 activeRestaurant 为 null 也渲染 Hooks，但在 return 时阻断
-    // 为了最简单的 TS 修复，我们直接在渲染逻辑里处理
-    
-    return <RestaurantModalContent r={r} onClose={() => setActiveRestaurant(null)} onUpdate={handleUpdateRestaurant} isEditingInitial={isEditing} setIsEditingParent={setIsEditing} />;
-  };
-
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans pb-24">
+      {/* Header */}
       <header className="bg-white sticky top-0 z-40 border-b border-slate-200 shadow-sm">
         <div className="max-w-3xl mx-auto px-4 py-4">
           <div className="flex justify-between items-center mb-4">
@@ -197,6 +293,7 @@ export default function NSWFoodTracker() {
               <div className="text-2xl font-bold text-amber-500">{stats.visited}<span className="text-slate-300 text-lg">/</span><span className="text-slate-400 text-lg">{stats.total}</span></div>
             </div>
           </div>
+          
           <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
             <div 
               className="h-full bg-gradient-to-r from-amber-400 to-orange-500 transition-all duration-1000 ease-out"
@@ -373,121 +470,15 @@ export default function NSWFoodTracker() {
         )}
       </main>
 
-      <RestaurantModal />
+      {activeRestaurant && (
+        <RestaurantModalContent 
+          r={activeRestaurant} 
+          onClose={() => setActiveRestaurant(null)} 
+          onUpdate={handleUpdateRestaurant}
+          isEditingInitial={isEditing}
+          setIsEditingParent={setIsEditing}
+        />
+      )}
     </div>
-  );
-}
-
-// 提取子组件以规避 Hook 渲染顺序问题
-interface ModalProps {
-  r: Restaurant;
-  onClose: () => void;
-  onUpdate: (id: number, data: Partial<Restaurant>) => void;
-  isEditingInitial: boolean;
-  setIsEditingParent: (val: boolean) => void;
-}
-
-const RestaurantModalContent: React.FC<ModalProps> = ({ r, onClose, onUpdate, isEditingInitial, setIsEditingParent }) => {
-  const [notes, setNotes] = useState<string>(r.userNotes || '');
-  const [price, setPrice] = useState<string | number>(r.userPrice || '');
-  const [rating, setRating] = useState<number>(r.userRating || 0);
-  // 使用本地 editing 状态，初始化自父级，但为了简单，我们同步父级
-  const isEditing = isEditingInitial; 
-
-  return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-        <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-          <div className="bg-slate-900 p-6 text-white relative">
-            <button 
-              onClick={onClose}
-              className="absolute top-4 right-4 text-white/70 hover:text-white bg-white/10 p-1 rounded-full"
-              type="button"
-            >
-              <X size={20} />
-            </button>
-            <div className="text-xs font-bold uppercase tracking-wider text-amber-400 mb-1">{r.cuisine}</div>
-            <h2 className="text-3xl font-serif font-bold leading-tight mb-2">{r.name}</h2>
-            <div className="flex items-center gap-2 text-sm text-slate-300">
-              <MapPin size={14} />
-              {r.location}
-            </div>
-          </div>
-
-          <div className="p-6 overflow-y-auto">
-            {!r.visited && !isEditing ? (
-              <div className="text-center py-8">
-                <div className="bg-slate-100 rounded-full w-20 h-20 flex items-center justify-center mx-auto mb-4">
-                  <Utensils className="text-slate-400" size={32} />
-                </div>
-                <h3 className="text-lg font-semibold text-slate-800 mb-2">还没吃过这家店？</h3>
-                <p className="text-slate-500 mb-6">准备好去品尝了吗？点击下方按钮开始记录你的体验。</p>
-                <button 
-                  onClick={() => setIsEditingParent(true)}
-                  className="w-full py-3 bg-slate-900 text-white rounded-xl font-medium hover:bg-slate-800 transition-colors flex items-center justify-center gap-2"
-                  type="button"
-                >
-                  <CheckCircle size={18} />
-                  打卡这家店
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-6">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">味道评分</label>
-                  <div className="flex justify-center p-4 bg-slate-50 rounded-xl border border-slate-100">
-                    <StarRating rating={rating} setRating={setRating} readonly={!isEditing && !!r.visited} />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">人均消费 ($)</label>
-                  <div className="relative">
-                    <DollarSign className="absolute left-3 top-3 text-slate-400" size={16} />
-                    <input 
-                      type="number" 
-                      value={price}
-                      onChange={(e) => setPrice(e.target.value)}
-                      readOnly={!isEditing && !!r.visited}
-                      placeholder="例如: 80"
-                      className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-400"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-2">美食笔记</label>
-                  <textarea 
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    readOnly={!isEditing && !!r.visited}
-                    placeholder="必点菜是什么？环境怎么样？"
-                    className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl h-32 focus:outline-none focus:ring-2 focus:ring-amber-400 resize-none"
-                  />
-                </div>
-
-                {(isEditing || !r.visited) && (
-                  <button 
-                    onClick={() => onUpdate(r.id, { userRating: rating, userPrice: price, userNotes: notes })}
-                    className="w-full py-3 bg-amber-500 text-white rounded-xl font-bold shadow-lg shadow-amber-500/30 hover:bg-amber-600 transition-all"
-                    type="button"
-                  >
-                    保存记录
-                  </button>
-                )}
-                
-                {!isEditing && r.visited && (
-                   <button 
-                   onClick={() => setIsEditingParent(true)}
-                   className="w-full py-2 text-slate-500 text-sm hover:text-slate-800 underline decoration-dotted"
-                   type="button"
-                 >
-                   修改记录
-                 </button>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
   );
 }
