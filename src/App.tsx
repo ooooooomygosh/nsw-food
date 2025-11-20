@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronDown, Award, ExternalLink, Map as MapIcon, Filter, Heart, Trash2, SortAsc, Download, Upload, RefreshCw, Plus, Globe, LayoutGrid, MessageSquarePlus, Dices, Send, Sparkles, Smile, Lock, UserCog, Tag, Image as ImageIcon, FileText, MessageCircle, GitCommit, Calendar, ChevronRight, History, Clock, HelpCircle, ArrowRight } from 'lucide-react';
 import { db, auth, isFirebaseConfigured } from './lib/firebase';
-import { collection, onSnapshot, doc, setDoc, updateDoc, addDoc, deleteDoc, query, orderBy } from 'firebase/firestore';
-import { signInAnonymously } from 'firebase/auth'; // [修复] 重新引入认证
+import { collection, onSnapshot, doc, setDoc, updateDoc, addDoc, deleteDoc, query, orderBy, CollectionReference, DocumentData } from 'firebase/firestore';
+import { signInAnonymously } from 'firebase/auth';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -21,6 +21,17 @@ const DefaultIcon = L.icon({
     iconAnchor: [12, 41]
 });
 L.Marker.prototype.options.icon = DefaultIcon;
+
+// --- 🔥 核心修复：定义 App ID 用于严格路径 ---
+const APP_ID = 'nsw-food-tracker-v1';
+
+// --- 🔥 核心修复：路径辅助函数 ---
+// 所有的集合操作必须通过这个函数获取引用，避免直接操作根目录导致权限错误
+const getSmartCollection = (collectionName: string): CollectionReference<DocumentData, DocumentData> => {
+    if (!db) throw new Error("Database not initialized");
+    // 使用 artifacts/{appId}/public/data/{collectionName} 结构确保权限通过
+    return collection(db, 'artifacts', APP_ID, 'public', 'data', collectionName);
+};
 
 interface Stats {
   visited: number;
@@ -158,7 +169,7 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
     const [feedbackType, setFeedbackType] = useState<'advice' | 'bug' | 'chat'>('advice');
     const [postImage, setPostImage] = useState<string | null>(null);
     const [replyContent, setReplyContent] = useState<Record<string, string>>({}); 
-    const [isSubmitting, setIsSubmitting] = useState(false); // [新增] 发送Loading状态
+    const [isSubmitting, setIsSubmitting] = useState(false); 
     
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -172,7 +183,8 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
     // 数据加载
     useEffect(() => {
         if (db && isFirebaseConfigured) {
-            const q = query(collection(db, "community_posts"), orderBy("createdAt", "desc"));
+            // [修复] 使用 getSmartCollection
+            const q = query(getSmartCollection("community_posts"), orderBy("createdAt", "desc"));
             const unsubscribe = onSnapshot(q, (snapshot) => {
                 setPosts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Post)));
             });
@@ -206,6 +218,15 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
         if (!newContent.trim() && !postImage) return; 
         if (activeTab === 'updates' && !newVersion.trim()) return alert("请输入版本号");
 
+        // [修复] 再次检查 Auth 状态
+        if (auth && !auth.currentUser) {
+            try {
+                await signInAnonymously(auth);
+            } catch (e) {
+                return alert("登录认证失败，请刷新页面重试");
+            }
+        }
+
         setIsSubmitting(true);
 
         const newPost: Post = {
@@ -220,16 +241,23 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
 
         try {
             if (db && isFirebaseConfigured) {
-                await addDoc(collection(db, "community_posts"), newPost);
+                // [修复] 使用 getSmartCollection
+                await addDoc(getSmartCollection("community_posts"), newPost);
             } else {
                 setPosts([newPost, ...posts]);
             }
             setNewContent('');
             setNewVersion('');
             setPostImage(null);
-        } catch (error) {
+            // 滚动到底部或顶部提示成功
+            if (activeTab === 'feedback') {
+                // 可以加一个 toast，这里简单处理
+                console.log("发送成功");
+            }
+        } catch (error: any) {
             console.error("Post failed:", error);
-            alert("发送失败，请检查网络或刷新重试");
+            // [优化] 显示具体错误
+            alert(`发送失败: ${error.message || "请检查网络或刷新重试"}`);
         } finally {
             setIsSubmitting(false);
         }
@@ -240,19 +268,21 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
         if (!reply) return;
         try {
             if (db && isFirebaseConfigured) {
-                await updateDoc(doc(db, "community_posts", postId), { reply });
+                // [修复] 使用 getSmartCollection 获取 doc
+                await updateDoc(doc(getSmartCollection("community_posts"), postId), { reply });
             } else {
                 setPosts(posts.map(p => p.id === postId ? { ...p, reply } : p));
             }
             setReplyContent(prev => ({ ...prev, [postId]: '' }));
-        } catch(e) { alert("回复失败"); }
+        } catch(e: any) { alert(`回复失败: ${e.message}`); }
     };
 
     const handleDeletePost = async (postId: string) => {
          if (!isAdmin) return;
          if (confirm("确定删除？")) {
              if (db && isFirebaseConfigured) {
-                 await deleteDoc(doc(db, "community_posts", postId));
+                 // [修复] 使用 getSmartCollection 获取 doc
+                 await deleteDoc(doc(getSmartCollection("community_posts"), postId));
              } else {
                  setPosts(posts.filter(p => p.id !== postId));
              }
@@ -739,10 +769,13 @@ export default function NSWFoodTracker() {
       }
   }, []);
 
-  // [修复] 匿名认证逻辑：解决“无法连接数据库”的问题
+  // [修复] 匿名认证逻辑：确保有权限读写数据库
   useEffect(() => {
       if (isFirebaseConfigured) {
-           signInAnonymously(auth).catch(console.error);
+           // 如果当前没有用户登录，则尝试匿名登录
+           if (!auth.currentUser) {
+               signInAnonymously(auth).catch(console.error);
+           }
       }
   }, []);
 
@@ -754,7 +787,8 @@ export default function NSWFoodTracker() {
      if (missingRestaurants.length > 0) {
          const batchPromises = missingRestaurants.map(r => {
              const completeData = { ...r, visited: false, userRating: 0, userPrice: '', userNotes: '', userDishes: '', userPhotos: [], visitedDate: null };
-             return setDoc(doc(db, "restaurants", String(r.id)), completeData);
+             // [修复] 使用 getSmartCollection
+             return setDoc(doc(getSmartCollection("restaurants"), String(r.id)), completeData);
          });
          await Promise.all(batchPromises);
      }
@@ -762,7 +796,8 @@ export default function NSWFoodTracker() {
 
   useEffect(() => {
     if (isFirebaseConfigured && db) {
-      const unsubscribe = onSnapshot(collection(db, "restaurants"), (snapshot) => {
+      // [修复] 使用 getSmartCollection
+      const unsubscribe = onSnapshot(getSmartCollection("restaurants"), (snapshot) => {
         if (snapshot.empty) {
           initFirebaseData();
         } else {
@@ -795,7 +830,8 @@ export default function NSWFoodTracker() {
     if (!db) return;
     const batchPromises = BASE_DATA.map(r => {
       const completeData = { ...r, visited: false, userRating: 0, userPrice: '', userNotes: '', userDishes: '', userPhotos: [], visitedDate: null };
-      return setDoc(doc(db, "restaurants", String(r.id)), completeData);
+      // [修复] 使用 getSmartCollection
+      return setDoc(doc(getSmartCollection("restaurants"), String(r.id)), completeData);
     });
     await Promise.all(batchPromises);
   };
@@ -862,7 +898,8 @@ export default function NSWFoodTracker() {
   const handleUpdateRestaurant = async (id: number, data: Partial<Restaurant>) => {
     const newData = { ...data, visited: true, visitedDate: new Date().toISOString().split('T')[0] };
     if (isFirebaseConfigured && db) {
-      const rRef = doc(db, "restaurants", String(id));
+      // [修复] 使用 getSmartCollection
+      const rRef = doc(getSmartCollection("restaurants"), String(id));
       await updateDoc(rRef, newData);
     } else {
       setRestaurants(prev => prev.map(r => r.id === id ? { ...r, ...newData } : r));
@@ -872,7 +909,8 @@ export default function NSWFoodTracker() {
 
   const handleDeleteRestaurant = async (id: number) => {
       if (isFirebaseConfigured && db) {
-          await deleteDoc(doc(db, "restaurants", String(id)));
+          // [修复] 使用 getSmartCollection
+          await deleteDoc(doc(getSmartCollection("restaurants"), String(id)));
       } else {
           setRestaurants(prev => prev.filter(r => r.id !== id));
       }
@@ -881,7 +919,8 @@ export default function NSWFoodTracker() {
   const handleAddCustomRestaurant = async (newR: Partial<Restaurant>) => {
       const completeR = { ...newR, userRating: 0, userPrice: '', userNotes: '', userDishes: '', userPhotos: newR.userPhotos || [], visitedDate: null } as Restaurant;
       if (isFirebaseConfigured && db) {
-          await setDoc(doc(db, "restaurants", String(completeR.id)), completeR);
+          // [修复] 使用 getSmartCollection
+          await setDoc(doc(getSmartCollection("restaurants"), String(completeR.id)), completeR);
       } else {
           setRestaurants([...restaurants, completeR]);
       }
