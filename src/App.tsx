@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronDown, Award, ExternalLink, Map as MapIcon, Filter, Heart, Trash2, SortAsc, Download, Upload, RefreshCw, Plus, Globe, LayoutGrid, MessageSquarePlus, Dices, Send, Sparkles, Smile, Lock, UserCog, Tag, Image as ImageIcon, FileText, MessageCircle, GitCommit, Calendar, ChevronRight, History, Clock, HelpCircle, ArrowRight } from 'lucide-react';
+import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronDown, Award, ExternalLink, Map as MapIcon, Filter, Heart, Trash2, SortAsc, Download, Upload, RefreshCw, Plus, Globe, LayoutGrid, MessageSquarePlus, Dices, Send, Sparkles, Smile, Lock, UserCog, Tag, Image as ImageIcon, FileText, MessageCircle, GitCommit, Calendar, ChevronRight, History, Clock, HelpCircle, ArrowRight, AlertTriangle } from 'lucide-react';
 import { db, auth, isFirebaseConfigured } from './lib/firebase';
-import { collection, onSnapshot, doc, setDoc, updateDoc, addDoc, deleteDoc, query, orderBy, CollectionReference, DocumentData } from 'firebase/firestore';
+import { collection, onSnapshot, doc, setDoc, updateDoc, addDoc, deleteDoc, query, orderBy, onAuthStateChanged } from 'firebase/firestore';
 import { signInAnonymously } from 'firebase/auth';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -21,17 +21,6 @@ const DefaultIcon = L.icon({
     iconAnchor: [12, 41]
 });
 L.Marker.prototype.options.icon = DefaultIcon;
-
-// --- 🔥 核心修复：定义 App ID 用于严格路径 ---
-const APP_ID = 'nsw-food-tracker-v1';
-
-// --- 🔥 核心修复：路径辅助函数 ---
-// 所有的集合操作必须通过这个函数获取引用，避免直接操作根目录导致权限错误
-const getSmartCollection = (collectionName: string): CollectionReference<DocumentData, DocumentData> => {
-    if (!db) throw new Error("Database not initialized");
-    // 使用 artifacts/{appId}/public/data/{collectionName} 结构确保权限通过
-    return collection(db, 'artifacts', APP_ID, 'public', 'data', collectionName);
-};
 
 interface Stats {
   visited: number;
@@ -169,7 +158,8 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
     const [feedbackType, setFeedbackType] = useState<'advice' | 'bug' | 'chat'>('advice');
     const [postImage, setPostImage] = useState<string | null>(null);
     const [replyContent, setReplyContent] = useState<Record<string, string>>({}); 
-    const [isSubmitting, setIsSubmitting] = useState(false); 
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [hasAuth, setHasAuth] = useState(false); // [新增] Auth 状态
     
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -180,13 +170,25 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
         setPostImage(null);
     }, [activeTab]);
 
-    // 数据加载
+    // 监听 Auth 状态，确保已登录
+    useEffect(() => {
+        if (auth) {
+            const unsubscribe = onAuthStateChanged(auth, (user) => {
+                setHasAuth(!!user);
+            });
+            return () => unsubscribe();
+        }
+    }, []);
+
+    // 数据加载 - [修复] 恢复读取根目录
     useEffect(() => {
         if (db && isFirebaseConfigured) {
-            // [修复] 使用 getSmartCollection
-            const q = query(getSmartCollection("community_posts"), orderBy("createdAt", "desc"));
+            // 直接读取根目录 'community_posts'，与你的截图一致
+            const q = query(collection(db, "community_posts"), orderBy("createdAt", "desc"));
             const unsubscribe = onSnapshot(q, (snapshot) => {
                 setPosts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Post)));
+            }, (error) => {
+                console.error("Snapshot Error:", error);
             });
             return () => unsubscribe();
         } else {
@@ -218,13 +220,13 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
         if (!newContent.trim() && !postImage) return; 
         if (activeTab === 'updates' && !newVersion.trim()) return alert("请输入版本号");
 
-        // [修复] 再次检查 Auth 状态
-        if (auth && !auth.currentUser) {
-            try {
-                await signInAnonymously(auth);
-            } catch (e) {
-                return alert("登录认证失败，请刷新页面重试");
-            }
+        if (!hasAuth && isFirebaseConfigured) {
+             // 尝试再次登录
+             try {
+                 await signInAnonymously(auth);
+             } catch (e) {
+                 return alert("连接服务器失败，请刷新页面重试");
+             }
         }
 
         setIsSubmitting(true);
@@ -241,23 +243,17 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
 
         try {
             if (db && isFirebaseConfigured) {
-                // [修复] 使用 getSmartCollection
-                await addDoc(getSmartCollection("community_posts"), newPost);
+                // [修复] 写入根目录
+                await addDoc(collection(db, "community_posts"), newPost);
             } else {
                 setPosts([newPost, ...posts]);
             }
             setNewContent('');
             setNewVersion('');
             setPostImage(null);
-            // 滚动到底部或顶部提示成功
-            if (activeTab === 'feedback') {
-                // 可以加一个 toast，这里简单处理
-                console.log("发送成功");
-            }
         } catch (error: any) {
             console.error("Post failed:", error);
-            // [优化] 显示具体错误
-            alert(`发送失败: ${error.message || "请检查网络或刷新重试"}`);
+            alert(`发送失败: ${error.message || "未知错误"}`);
         } finally {
             setIsSubmitting(false);
         }
@@ -268,8 +264,8 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
         if (!reply) return;
         try {
             if (db && isFirebaseConfigured) {
-                // [修复] 使用 getSmartCollection 获取 doc
-                await updateDoc(doc(getSmartCollection("community_posts"), postId), { reply });
+                // [修复] 操作根目录
+                await updateDoc(doc(db, "community_posts", postId), { reply });
             } else {
                 setPosts(posts.map(p => p.id === postId ? { ...p, reply } : p));
             }
@@ -281,8 +277,8 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
          if (!isAdmin) return;
          if (confirm("确定删除？")) {
              if (db && isFirebaseConfigured) {
-                 // [修复] 使用 getSmartCollection 获取 doc
-                 await deleteDoc(doc(getSmartCollection("community_posts"), postId));
+                 // [修复] 操作根目录
+                 await deleteDoc(doc(db, "community_posts", postId));
              } else {
                  setPosts(posts.filter(p => p.id !== postId));
              }
@@ -319,6 +315,13 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
                 </div>
 
                 <div className="flex-1 overflow-y-auto bg-slate-50/50 p-6">
+                    {/* 如果未连接到 Firebase 且也不是本地模式，显示提示 */}
+                    {isFirebaseConfigured && !hasAuth && (
+                        <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl mb-4 flex items-center gap-2 text-amber-800 text-xs">
+                            <RefreshCw className="animate-spin" size={14}/> 正在连接服务器...
+                        </div>
+                    )}
+
                     {activeTab === 'updates' ? (
                         <div className="space-y-8 pl-2">
                             {isAdmin && (
@@ -326,7 +329,7 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
                                     <h3 className="text-xs font-bold text-amber-700 mb-3 flex items-center gap-1"><UserCog size={14}/> 发布新版本</h3>
                                     <input type="text" placeholder="版本号 (e.g. v1.2.0)" className="w-full mb-2 px-3 py-2 bg-white rounded-lg text-sm border border-amber-200 outline-none focus:border-amber-400" value={newVersion} onChange={e => setNewVersion(e.target.value)} />
                                     <textarea placeholder="更新了什么..." className="w-full mb-2 px-3 py-2 bg-white rounded-lg text-sm border border-amber-200 outline-none focus:border-amber-400 h-20 resize-none" value={newContent} onChange={e => setNewContent(e.target.value)} />
-                                    <button onClick={handlePost} disabled={isSubmitting} className="w-full py-2 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600 disabled:opacity-50">
+                                    <button onClick={handlePost} disabled={isSubmitting || !hasAuth} className="w-full py-2 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600 disabled:opacity-50">
                                         {isSubmitting ? '发布中...' : '发布更新'}
                                     </button>
                                 </div>
@@ -417,13 +420,13 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
                                     value={newContent}
                                     onChange={e => setNewContent(e.target.value)}
                                     onKeyDown={e => e.key === 'Enter' && !isSubmitting && handlePost()}
-                                    placeholder="写点什么..."
+                                    placeholder={hasAuth ? "写点什么..." : "连接中..."}
                                     className="flex-1 bg-transparent py-3 text-sm outline-none"
-                                    disabled={isSubmitting}
+                                    disabled={isSubmitting || !hasAuth}
                                 />
                             </div>
                             
-                            <button onClick={handlePost} disabled={isSubmitting} className="bg-amber-500 hover:bg-amber-600 text-white w-10 h-10 rounded-xl flex items-center justify-center transition-colors shadow-sm shadow-amber-200 disabled:opacity-50 disabled:cursor-not-allowed">
+                            <button onClick={handlePost} disabled={isSubmitting || !hasAuth} className="bg-amber-500 hover:bg-amber-600 text-white w-10 h-10 rounded-xl flex items-center justify-center transition-colors shadow-sm shadow-amber-200 disabled:opacity-50 disabled:cursor-not-allowed">
                                 {isSubmitting ? <RefreshCw size={18} className="animate-spin"/> : <Send size={18} className="ml-0.5"/>}
                             </button>
                         </div>
@@ -769,13 +772,16 @@ export default function NSWFoodTracker() {
       }
   }, []);
 
-  // [修复] 匿名认证逻辑：确保有权限读写数据库
+  // [修复] 监听 Auth 状态：确保有权限读写数据库
   useEffect(() => {
       if (isFirebaseConfigured) {
-           // 如果当前没有用户登录，则尝试匿名登录
-           if (!auth.currentUser) {
-               signInAnonymously(auth).catch(console.error);
-           }
+           // 监听状态变化，如果未登录则匿名登录
+           const unsubscribe = onAuthStateChanged(auth, (user) => {
+               if (!user) {
+                   signInAnonymously(auth).catch(console.error);
+               }
+           });
+           return () => unsubscribe();
       }
   }, []);
 
@@ -787,8 +793,8 @@ export default function NSWFoodTracker() {
      if (missingRestaurants.length > 0) {
          const batchPromises = missingRestaurants.map(r => {
              const completeData = { ...r, visited: false, userRating: 0, userPrice: '', userNotes: '', userDishes: '', userPhotos: [], visitedDate: null };
-             // [修复] 使用 getSmartCollection
-             return setDoc(doc(getSmartCollection("restaurants"), String(r.id)), completeData);
+             // [修复] 写入根目录 "restaurants"
+             return setDoc(doc(db, "restaurants", String(r.id)), completeData);
          });
          await Promise.all(batchPromises);
      }
@@ -796,8 +802,8 @@ export default function NSWFoodTracker() {
 
   useEffect(() => {
     if (isFirebaseConfigured && db) {
-      // [修复] 使用 getSmartCollection
-      const unsubscribe = onSnapshot(getSmartCollection("restaurants"), (snapshot) => {
+      // [修复] 读取根目录 "restaurants"
+      const unsubscribe = onSnapshot(collection(db, "restaurants"), (snapshot) => {
         if (snapshot.empty) {
           initFirebaseData();
         } else {
@@ -830,8 +836,8 @@ export default function NSWFoodTracker() {
     if (!db) return;
     const batchPromises = BASE_DATA.map(r => {
       const completeData = { ...r, visited: false, userRating: 0, userPrice: '', userNotes: '', userDishes: '', userPhotos: [], visitedDate: null };
-      // [修复] 使用 getSmartCollection
-      return setDoc(doc(getSmartCollection("restaurants"), String(r.id)), completeData);
+      // [修复] 写入根目录 "restaurants"
+      return setDoc(doc(db, "restaurants", String(r.id)), completeData);
     });
     await Promise.all(batchPromises);
   };
@@ -898,8 +904,8 @@ export default function NSWFoodTracker() {
   const handleUpdateRestaurant = async (id: number, data: Partial<Restaurant>) => {
     const newData = { ...data, visited: true, visitedDate: new Date().toISOString().split('T')[0] };
     if (isFirebaseConfigured && db) {
-      // [修复] 使用 getSmartCollection
-      const rRef = doc(getSmartCollection("restaurants"), String(id));
+      // [修复] 写入根目录 "restaurants"
+      const rRef = doc(db, "restaurants", String(id));
       await updateDoc(rRef, newData);
     } else {
       setRestaurants(prev => prev.map(r => r.id === id ? { ...r, ...newData } : r));
@@ -909,8 +915,8 @@ export default function NSWFoodTracker() {
 
   const handleDeleteRestaurant = async (id: number) => {
       if (isFirebaseConfigured && db) {
-          // [修复] 使用 getSmartCollection
-          await deleteDoc(doc(getSmartCollection("restaurants"), String(id)));
+          // [修复] 写入根目录 "restaurants"
+          await deleteDoc(doc(db, "restaurants", String(id)));
       } else {
           setRestaurants(prev => prev.filter(r => r.id !== id));
       }
@@ -919,8 +925,8 @@ export default function NSWFoodTracker() {
   const handleAddCustomRestaurant = async (newR: Partial<Restaurant>) => {
       const completeR = { ...newR, userRating: 0, userPrice: '', userNotes: '', userDishes: '', userPhotos: newR.userPhotos || [], visitedDate: null } as Restaurant;
       if (isFirebaseConfigured && db) {
-          // [修复] 使用 getSmartCollection
-          await setDoc(doc(getSmartCollection("restaurants"), String(completeR.id)), completeR);
+          // [修复] 写入根目录 "restaurants"
+          await setDoc(doc(db, "restaurants", String(completeR.id)), completeR);
       } else {
           setRestaurants([...restaurants, completeR]);
       }
