@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronDown, Award, ExternalLink, Map as MapIcon, Filter, Heart, Trash2, SortAsc, Download, Upload, RefreshCw, Plus, Globe, LayoutGrid, MessageSquarePlus, Dices, Send, Sparkles, Smile, Lock, UserCog, Tag, Image as ImageIcon, FileText, MessageCircle, GitCommit, Calendar, ChevronRight, History, Clock, HelpCircle, ArrowRight, AlertTriangle } from 'lucide-react';
+import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronDown, Award, ExternalLink, Map as MapIcon, Filter, Heart, Trash2, SortAsc, Download, Upload, RefreshCw, Plus, Globe, LayoutGrid, MessageSquarePlus, Dices, Send, Sparkles, Smile, Lock, UserCog, Tag, Image as ImageIcon, FileText, MessageCircle, GitCommit, Calendar, ChevronRight, History, Clock, HelpCircle, ArrowRight, AlertTriangle, Edit2, Check, XCircle } from 'lucide-react';
 import { db, auth, isFirebaseConfigured } from './lib/firebase';
 // 从 firestore 移除 onAuthStateChanged
 import { collection, onSnapshot, doc, setDoc, updateDoc, addDoc, deleteDoc, query, orderBy } from 'firebase/firestore';
@@ -162,6 +162,10 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
     const [replyContent, setReplyContent] = useState<Record<string, string>>({}); 
     const [isSubmitting, setIsSubmitting] = useState(false);
     
+    // 编辑模式状态
+    const [editingPostId, setEditingPostId] = useState<string | null>(null);
+    const [editContent, setEditContent] = useState('');
+    
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     // 切换Tab时清理输入框
@@ -169,14 +173,28 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
         setNewContent('');
         setNewVersion('');
         setPostImage(null);
+        setEditingPostId(null);
     }, [activeTab]);
+
+    // 监听 Auth 状态，确保已登录
+    useEffect(() => {
+        if (auth) {
+            const unsubscribe = onAuthStateChanged(auth, (user: any) => {
+                if (!user) {
+                    signInAnonymously(auth).catch(console.error);
+                }
+            });
+            return () => unsubscribe();
+        }
+    }, []);
 
     // 数据加载
     useEffect(() => {
         if (db && isFirebaseConfigured) {
             const q = query(collection(db, "community_posts"), orderBy("createdAt", "desc"));
             const unsubscribe = onSnapshot(q, (snapshot) => {
-                setPosts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Post)));
+                // [🔥 核心修复] 把 id: doc.id 放在最后，确保使用 Firestore 的真实文档 ID 覆盖数据中的旧 ID
+                setPosts(snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Post)));
             }, (error) => {
                 console.error("Snapshot Error:", error);
             });
@@ -210,34 +228,32 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
         if (!newContent.trim() && !postImage) return; 
         if (activeTab === 'updates' && !newVersion.trim()) return alert("请输入版本号");
 
-        // Auth 检查放在后台，如果是匿名登录，通常会自动处理，这里不强制阻断，让 Firestore 规则决定
         if (auth && !auth.currentUser) {
             try { await signInAnonymously(auth); } catch (e) {}
         }
 
         setIsSubmitting(true);
 
-        // [🔥 核心修复] 构建不包含 undefined 的对象
+        // [🔥 核心修复] 不再将 id 存入 doc 数据中，避免 ID 混乱
         const basePost = {
-            id: Date.now().toString(),
             content: newContent,
             type: activeTab === 'updates' ? 'update' : feedbackType,
             createdAt: new Date().toISOString(),
             isAdminPost: activeTab === 'updates'
         };
 
-        // 动态添加可选字段，防止 undefined 进入 Firestore
-        const newPost: Post = {
+        const newPostData = {
             ...basePost,
             ...(activeTab === 'updates' && newVersion ? { version: newVersion } : {}),
             ...(postImage ? { image: postImage } : {}),
-        } as Post;
+        };
 
         try {
             if (db && isFirebaseConfigured) {
-                await addDoc(collection(db, "community_posts"), newPost);
+                await addDoc(collection(db, "community_posts"), newPostData);
             } else {
-                setPosts([newPost, ...posts]);
+                const localId = Date.now().toString();
+                setPosts([{ ...newPostData, id: localId } as Post, ...posts]);
             }
             setNewContent('');
             setNewVersion('');
@@ -260,18 +276,47 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
                 setPosts(posts.map(p => p.id === postId ? { ...p, reply } : p));
             }
             setReplyContent(prev => ({ ...prev, [postId]: '' }));
-        } catch(e: any) { alert(`回复失败: ${e.message}`); }
+        } catch(e: any) { 
+            console.error(e);
+            alert(`回复失败: ${e.message}`); 
+        }
     };
 
     const handleDeletePost = async (postId: string) => {
          if (!isAdmin) return;
          if (confirm("确定删除？")) {
-             if (db && isFirebaseConfigured) {
-                 await deleteDoc(doc(db, "community_posts", postId));
-             } else {
-                 setPosts(posts.filter(p => p.id !== postId));
+             try {
+                 if (db && isFirebaseConfigured) {
+                     await deleteDoc(doc(db, "community_posts", postId));
+                 } else {
+                     setPosts(posts.filter(p => p.id !== postId));
+                 }
+             } catch(e: any) {
+                 alert(`删除失败: ${e.message}`);
              }
          }
+    }
+
+    // [新增] 处理开始编辑
+    const startEditing = (post: Post) => {
+        setEditingPostId(post.id);
+        setEditContent(post.content);
+    }
+
+    // [新增] 提交编辑
+    const handleUpdatePostContent = async (postId: string) => {
+        if (!editContent.trim()) return;
+        try {
+            if (db && isFirebaseConfigured) {
+                await updateDoc(doc(db, "community_posts", postId), { content: editContent });
+            } else {
+                setPosts(posts.map(p => p.id === postId ? { ...p, content: editContent } : p));
+            }
+            setEditingPostId(null);
+            setEditContent("");
+        } catch(e: any) {
+            alert(`更新失败: ${e.message}`);
+        }
     }
 
     const updatePosts = posts.filter(p => p.type === 'update');
@@ -323,11 +368,35 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
                                         <div className="flex items-baseline gap-2 mb-1">
                                             <span className="text-sm font-black text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{post.version || 'Update'}</span>
                                             <span className="text-xs text-slate-400 flex items-center gap-1"><Calendar size={10}/> {new Date(post.createdAt).toLocaleDateString()}</span>
-                                            {isAdmin && <button onClick={() => handleDeletePost(post.id)} className="ml-auto text-slate-300 hover:text-red-500"><Trash2 size={14}/></button>}
+                                            
+                                            {isAdmin && (
+                                                <div className="ml-auto flex gap-2">
+                                                    {editingPostId === post.id ? (
+                                                        <>
+                                                             <button onClick={() => handleUpdatePostContent(post.id)} className="text-green-500 hover:text-green-600"><Check size={14}/></button>
+                                                             <button onClick={() => setEditingPostId(null)} className="text-slate-400 hover:text-slate-600"><XCircle size={14}/></button>
+                                                        </>
+                                                    ) : (
+                                                        <>
+                                                            <button onClick={() => startEditing(post)} className="text-slate-300 hover:text-blue-500"><Edit2 size={14}/></button>
+                                                            <button onClick={() => handleDeletePost(post.id)} className="text-slate-300 hover:text-red-500"><Trash2 size={14}/></button>
+                                                        </>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
-                                        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
-                                            {post.content}
-                                        </div>
+                                        
+                                        {editingPostId === post.id ? (
+                                            <textarea 
+                                                className="w-full p-3 rounded-xl border border-amber-400 outline-none text-sm h-24"
+                                                value={editContent}
+                                                onChange={e => setEditContent(e.target.value)}
+                                            />
+                                        ) : (
+                                            <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
+                                                {post.content}
+                                            </div>
+                                        )}
                                     </div>
                                 ))}
                                 {updatePosts.length === 0 && <div className="ml-6 text-slate-400 text-sm">暂无更新记录</div>}
@@ -344,10 +413,34 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
                                             {post.type === 'chat' && <span className="bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-md text-[10px] font-bold">💬 闲聊</span>}
                                             <span className="text-slate-300 text-[10px]">{new Date(post.createdAt).toLocaleDateString()}</span>
                                         </div>
-                                        {isAdmin && <button onClick={() => handleDeletePost(post.id)} className="text-slate-200 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={14}/></button>}
+                                        
+                                        {isAdmin && (
+                                            <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                 {editingPostId === post.id ? (
+                                                    <>
+                                                         <button onClick={() => handleUpdatePostContent(post.id)} className="text-green-500 hover:text-green-600"><Check size={14}/></button>
+                                                         <button onClick={() => setEditingPostId(null)} className="text-slate-400 hover:text-slate-600"><XCircle size={14}/></button>
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <button onClick={() => startEditing(post)} className="text-slate-200 hover:text-blue-500"><Edit2 size={14}/></button>
+                                                        <button onClick={() => handleDeletePost(post.id)} className="text-slate-200 hover:text-red-500"><Trash2 size={14}/></button>
+                                                    </>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
                                     {post.image && <img src={post.image} className="w-full h-32 object-cover rounded-lg mb-3 border border-slate-100" />}
-                                    <p className="text-sm text-slate-800 mb-3 leading-relaxed whitespace-pre-wrap">{post.content}</p>
+                                    
+                                    {editingPostId === post.id ? (
+                                         <textarea 
+                                            className="w-full p-3 mb-2 rounded-xl border border-amber-400 outline-none text-sm h-20"
+                                            value={editContent}
+                                            onChange={e => setEditContent(e.target.value)}
+                                        />
+                                    ) : (
+                                        <p className="text-sm text-slate-800 mb-3 leading-relaxed whitespace-pre-wrap">{post.content}</p>
+                                    )}
                                     
                                     {post.reply && (
                                         <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 flex gap-3">
@@ -754,10 +847,8 @@ export default function NSWFoodTracker() {
       }
   }, []);
 
-  // 保持匿名认证，以防万一规则改变，但不再作为硬性条件
   useEffect(() => {
       if (isFirebaseConfigured) {
-           // [修复2] 添加类型注解 (user: any)
            const unsubscribe = onAuthStateChanged(auth, (user: any) => {
                if (!user) {
                    signInAnonymously(auth).catch(console.error);
@@ -775,7 +866,6 @@ export default function NSWFoodTracker() {
      if (missingRestaurants.length > 0) {
          const batchPromises = missingRestaurants.map(r => {
              const completeData = { ...r, visited: false, userRating: 0, userPrice: '', userNotes: '', userDishes: '', userPhotos: [], visitedDate: null };
-             // [修复] 写入根目录 "restaurants"
              return setDoc(doc(db, "restaurants", String(r.id)), completeData);
          });
          await Promise.all(batchPromises);
@@ -784,7 +874,6 @@ export default function NSWFoodTracker() {
 
   useEffect(() => {
     if (isFirebaseConfigured && db) {
-      // [修复] 读取根目录 "restaurants"
       const unsubscribe = onSnapshot(collection(db, "restaurants"), (snapshot) => {
         if (snapshot.empty) {
           initFirebaseData();
@@ -818,7 +907,6 @@ export default function NSWFoodTracker() {
     if (!db) return;
     const batchPromises = BASE_DATA.map(r => {
       const completeData = { ...r, visited: false, userRating: 0, userPrice: '', userNotes: '', userDishes: '', userPhotos: [], visitedDate: null };
-      // [修复] 写入根目录 "restaurants"
       return setDoc(doc(db, "restaurants", String(r.id)), completeData);
     });
     await Promise.all(batchPromises);
@@ -886,7 +974,6 @@ export default function NSWFoodTracker() {
   const handleUpdateRestaurant = async (id: number, data: Partial<Restaurant>) => {
     const newData = { ...data, visited: true, visitedDate: new Date().toISOString().split('T')[0] };
     if (isFirebaseConfigured && db) {
-      // [修复] 写入根目录 "restaurants"
       const rRef = doc(db, "restaurants", String(id));
       await updateDoc(rRef, newData);
     } else {
@@ -897,7 +984,6 @@ export default function NSWFoodTracker() {
 
   const handleDeleteRestaurant = async (id: number) => {
       if (isFirebaseConfigured && db) {
-          // [修复] 写入根目录 "restaurants"
           await deleteDoc(doc(db, "restaurants", String(id)));
       } else {
           setRestaurants(prev => prev.filter(r => r.id !== id));
@@ -907,7 +993,6 @@ export default function NSWFoodTracker() {
   const handleAddCustomRestaurant = async (newR: Partial<Restaurant>) => {
       const completeR = { ...newR, userRating: 0, userPrice: '', userNotes: '', userDishes: '', userPhotos: newR.userPhotos || [], visitedDate: null } as Restaurant;
       if (isFirebaseConfigured && db) {
-          // [修复] 写入根目录 "restaurants"
           await setDoc(doc(db, "restaurants", String(completeR.id)), completeR);
       } else {
           setRestaurants([...restaurants, completeR]);
