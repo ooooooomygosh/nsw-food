@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronDown, Award, ExternalLink, Map as MapIcon, Filter, Heart, Trash2, SortAsc, Download, Upload, RefreshCw, Plus, Globe, LayoutGrid, MessageSquarePlus, Dices, Send, Sparkles, Smile, Lock, UserCog, Tag, Image as ImageIcon, FileText, MessageCircle } from 'lucide-react';
+import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronDown, Award, ExternalLink, Map as MapIcon, Filter, Heart, Trash2, SortAsc, Download, Upload, RefreshCw, Plus, Globe, LayoutGrid, MessageSquarePlus, Dices, Send, Sparkles, Smile, Lock, UserCog, Tag, Image as ImageIcon, FileText, MessageCircle, GitCommit, Calendar, ChevronRight, History, Clock } from 'lucide-react';
 import { db, auth, isFirebaseConfigured } from './lib/firebase';
 import { collection, onSnapshot, doc, setDoc, updateDoc, addDoc, deleteDoc, query, orderBy } from 'firebase/firestore';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
@@ -32,10 +32,11 @@ interface Stats {
 
 interface Post {
     id: string;
-    content: string;
-    type: 'advice' | 'bug' | 'chat' | 'update'; // update 是管理员专用的更新日志
+    content: string; // 对于更新日志，这里存放主要内容
+    version?: string; // 版本号，例如 v1.0.1
+    type: 'advice' | 'bug' | 'chat' | 'update'; 
     createdAt: string;
-    reply?: string; // 管理员回复
+    reply?: string;
     isAdminPost?: boolean;
 }
 
@@ -104,14 +105,18 @@ const StarRating = ({ rating, setRating, readonly = false, size = 'md' }: { rati
   );
 };
 
-// [新增] 社区/更新日志板块
+// [重构] 社区/更新日志板块 - 侧边抽屉样式
 const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () => void }) => {
+    const [activeTab, setActiveTab] = useState<'updates' | 'feedback'>('updates');
     const [posts, setPosts] = useState<Post[]>([]);
+    
+    // 发帖状态
     const [newContent, setNewContent] = useState('');
-    const [postType, setPostType] = useState<'advice' | 'bug' | 'chat' | 'update'>('advice');
-    const [replyContent, setReplyContent] = useState<Record<string, string>>({}); // 暂存回复内容
+    const [newVersion, setNewVersion] = useState(''); // 仅用于更新日志
+    const [feedbackType, setFeedbackType] = useState<'advice' | 'bug' | 'chat'>('advice');
+    const [replyContent, setReplyContent] = useState<Record<string, string>>({}); 
 
-    // 模拟初始数据或从Firebase加载
+    // 数据加载
     useEffect(() => {
         if (db && isFirebaseConfigured) {
             const q = query(collection(db, "community_posts"), orderBy("createdAt", "desc"));
@@ -120,14 +125,13 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
             });
             return () => unsubscribe();
         } else {
-            // 本地模拟数据
             const localPosts = localStorage.getItem('nsw_food_community_posts');
             if (localPosts) {
                 setPosts(JSON.parse(localPosts));
             } else {
                 setPosts([
-                    { id: '1', content: 'V1.0 版本正式上线！欢迎大家使用 NSW 美食摘星。', type: 'update', createdAt: new Date().toISOString(), isAdminPost: true },
-                    { id: '2', content: '希望能增加一个按价格筛选的功能~', type: 'advice', createdAt: new Date(Date.now() - 86400000).toISOString(), reply: '已在 V1.1 更新中添加该功能！' }
+                    { id: '1', version: 'v1.0.0', content: '🎉 NSW 美食摘星正式上线！\n- 支持地图模式\n- 支持打卡记录', type: 'update', createdAt: new Date().toISOString(), isAdminPost: true },
+                    { id: '2', content: '希望能增加一个按价格筛选的功能~', type: 'advice', createdAt: new Date(Date.now() - 86400000).toISOString(), reply: '安排！' }
                 ]);
             }
         }
@@ -139,12 +143,15 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
 
     const handlePost = async () => {
         if (!newContent.trim()) return;
+        if (activeTab === 'updates' && !newVersion.trim()) return alert("请输入版本号");
+
         const newPost: Post = {
             id: Date.now().toString(),
             content: newContent,
-            type: isAdmin && postType === 'update' ? 'update' : postType === 'update' ? 'chat' : postType, // 非管理员不能发 update
+            version: activeTab === 'updates' ? newVersion : undefined,
+            type: activeTab === 'updates' ? 'update' : feedbackType,
             createdAt: new Date().toISOString(),
-            isAdminPost: isAdmin && postType === 'update'
+            isAdminPost: activeTab === 'updates' // 只有在更新Tab下发的是官方贴
         };
 
         if (db && isFirebaseConfigured) {
@@ -153,12 +160,12 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
             setPosts([newPost, ...posts]);
         }
         setNewContent('');
+        setNewVersion('');
     };
 
     const handleReply = async (postId: string) => {
         const reply = replyContent[postId];
         if (!reply) return;
-
         if (db && isFirebaseConfigured) {
             await updateDoc(doc(db, "community_posts", postId), { reply });
         } else {
@@ -169,7 +176,7 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
 
     const handleDeletePost = async (postId: string) => {
          if (!isAdmin) return;
-         if (confirm("确定删除这条帖子吗？")) {
+         if (confirm("确定删除？")) {
              if (db && isFirebaseConfigured) {
                  await deleteDoc(doc(db, "community_posts", postId));
              } else {
@@ -178,75 +185,169 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
          }
     }
 
-    return (
-        <div className="fixed inset-0 z-[110] bg-slate-100 flex flex-col animate-in slide-in-from-bottom-10 duration-300">
-            <div className="bg-white px-4 py-4 shadow-sm flex justify-between items-center shrink-0 z-10">
-                <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-                    <MessageSquarePlus className="text-amber-500" /> 社区 & 更新日志
-                </h2>
-                <button onClick={onClose} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200"><X size={20} /></button>
-            </div>
+    const updatePosts = posts.filter(p => p.type === 'update');
+    const feedbackPosts = posts.filter(p => p.type !== 'update');
 
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 max-w-3xl mx-auto w-full">
-                {/* 发布框 */}
-                <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
-                    <div className="flex gap-2 mb-3 overflow-x-auto pb-1">
-                        {isAdmin && <button onClick={() => setPostType('update')} className={`px-3 py-1.5 rounded-lg text-xs font-bold border whitespace-nowrap ${postType === 'update' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-slate-600 border-slate-200'}`}>🚀 更新公告</button>}
-                        <button onClick={() => setPostType('advice')} className={`px-3 py-1.5 rounded-lg text-xs font-bold border whitespace-nowrap ${postType === 'advice' ? 'bg-blue-500 text-white border-blue-500' : 'bg-white text-slate-600 border-slate-200'}`}>💡 提建议</button>
-                        <button onClick={() => setPostType('bug')} className={`px-3 py-1.5 rounded-lg text-xs font-bold border whitespace-nowrap ${postType === 'bug' ? 'bg-red-500 text-white border-red-500' : 'bg-white text-slate-600 border-slate-200'}`}>🐛 报Bug</button>
-                        <button onClick={() => setPostType('chat')} className={`px-3 py-1.5 rounded-lg text-xs font-bold border whitespace-nowrap ${postType === 'chat' ? 'bg-emerald-500 text-white border-emerald-500' : 'bg-white text-slate-600 border-slate-200'}`}>💬 闲聊</button>
+    return (
+        <div className="fixed inset-0 z-[150] flex justify-end">
+            {/* 背景遮罩 - 点击关闭 */}
+            <div className="absolute inset-0 bg-black/20 backdrop-blur-sm transition-opacity" onClick={onClose}></div>
+            
+            {/* 右侧抽屉 */}
+            <div className="relative w-full max-w-md h-full bg-white shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
+                {/* 头部 */}
+                <div className="px-6 py-5 border-b border-slate-100 bg-white z-10 flex justify-between items-center">
+                    <div>
+                        <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                            <Sparkles className="text-amber-500 fill-amber-500" size={20}/> 社区动态
+                        </h2>
+                        <p className="text-xs text-slate-400 mt-1">查看更新日志与反馈</p>
                     </div>
-                    <textarea 
-                        value={newContent} 
-                        onChange={e => setNewContent(e.target.value)} 
-                        placeholder={isAdmin && postType === 'update' ? "发布新版本更新内容..." : "分享你的想法或反馈..."}
-                        className="w-full p-3 bg-slate-50 rounded-xl text-sm border border-slate-200 focus:ring-2 focus:ring-amber-400 outline-none resize-none h-24"
-                    />
-                    <div className="flex justify-end mt-2">
-                        <button onClick={handlePost} className="bg-slate-900 text-white px-6 py-2 rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-slate-800"><Send size={14}/> 发布</button>
-                    </div>
+                    <button onClick={onClose} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"><X size={20}/></button>
                 </div>
 
-                {/* 帖子列表 */}
-                <div className="space-y-4 pb-20">
-                    {posts.map(post => (
-                        <div key={post.id} className={`p-5 rounded-2xl shadow-sm border relative group ${post.type === 'update' ? 'bg-amber-50 border-amber-100' : 'bg-white border-slate-100'}`}>
-                            {isAdmin && <button onClick={() => handleDeletePost(post.id)} className="absolute top-3 right-3 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16}/></button>}
-                            
-                            <div className="flex items-center gap-2 mb-2">
-                                {post.type === 'update' && <span className="bg-amber-500 text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase">官方更新</span>}
-                                {post.type === 'advice' && <span className="bg-blue-100 text-blue-600 px-2 py-0.5 rounded text-[10px] font-bold uppercase">建议</span>}
-                                {post.type === 'bug' && <span className="bg-red-100 text-red-600 px-2 py-0.5 rounded text-[10px] font-bold uppercase">Bug</span>}
-                                {post.type === 'chat' && <span className="bg-emerald-100 text-emerald-600 px-2 py-0.5 rounded text-[10px] font-bold uppercase">闲聊</span>}
-                                <span className="text-slate-400 text-xs">{new Date(post.createdAt).toLocaleDateString()}</span>
-                            </div>
-                            
-                            <p className="text-slate-800 text-sm leading-relaxed whitespace-pre-wrap">{post.content}</p>
+                {/* Tabs */}
+                <div className="flex border-b border-slate-100">
+                    <button 
+                        onClick={() => setActiveTab('updates')} 
+                        className={`flex-1 py-4 text-sm font-bold transition-colors relative ${activeTab === 'updates' ? 'text-amber-600' : 'text-slate-400 hover:text-slate-600'}`}
+                    >
+                        <div className="flex items-center justify-center gap-2"><History size={16}/> 更新日志</div>
+                        {activeTab === 'updates' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-amber-500 mx-8 rounded-t-full"/>}
+                    </button>
+                    <button 
+                        onClick={() => setActiveTab('feedback')} 
+                        className={`flex-1 py-4 text-sm font-bold transition-colors relative ${activeTab === 'feedback' ? 'text-amber-600' : 'text-slate-400 hover:text-slate-600'}`}
+                    >
+                        <div className="flex items-center justify-center gap-2"><MessageCircle size={16}/> 许愿池</div>
+                        {activeTab === 'feedback' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-amber-500 mx-8 rounded-t-full"/>}
+                    </button>
+                </div>
 
-                            {/* 管理员回复展示 */}
-                            {post.reply && (
-                                <div className="mt-3 bg-slate-100 p-3 rounded-xl border-l-4 border-amber-400">
-                                    <p className="text-xs font-bold text-slate-500 mb-1 flex items-center gap-1"><UserCog size={12}/> 管理员回复：</p>
-                                    <p className="text-sm text-slate-700">{post.reply}</p>
-                                </div>
-                            )}
-
-                            {/* 管理员回复输入框 */}
-                            {isAdmin && !post.reply && post.type !== 'update' && (
-                                <div className="mt-3 flex gap-2">
+                {/* 内容区域 */}
+                <div className="flex-1 overflow-y-auto bg-slate-50/50 p-6">
+                    {activeTab === 'updates' ? (
+                        <div className="space-y-8 pl-2">
+                            {/* 更新发布框 (仅管理员) */}
+                            {isAdmin && (
+                                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 shadow-sm">
+                                    <h3 className="text-xs font-bold text-amber-700 mb-3 flex items-center gap-1"><UserCog size={14}/> 发布新版本</h3>
                                     <input 
                                         type="text" 
-                                        placeholder="回复..." 
-                                        className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-amber-400"
-                                        value={replyContent[post.id] || ''}
-                                        onChange={e => setReplyContent({...replyContent, [post.id]: e.target.value})}
+                                        placeholder="版本号 (e.g. v1.2.0)" 
+                                        className="w-full mb-2 px-3 py-2 bg-white rounded-lg text-sm border border-amber-200 outline-none focus:border-amber-400"
+                                        value={newVersion}
+                                        onChange={e => setNewVersion(e.target.value)}
                                     />
-                                    <button onClick={() => handleReply(post.id)} className="text-amber-600 text-xs font-bold px-3 hover:bg-amber-50 rounded-lg">回复</button>
+                                    <textarea 
+                                        placeholder="更新了什么..." 
+                                        className="w-full mb-2 px-3 py-2 bg-white rounded-lg text-sm border border-amber-200 outline-none focus:border-amber-400 h-20 resize-none"
+                                        value={newContent}
+                                        onChange={e => setNewContent(e.target.value)}
+                                    />
+                                    <button onClick={handlePost} className="w-full py-2 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600">发布更新</button>
                                 </div>
                             )}
+
+                            {/* 时间轴列表 */}
+                            <div className="relative border-l-2 border-slate-200 space-y-8">
+                                {updatePosts.map((post) => (
+                                    <div key={post.id} className="ml-6 relative">
+                                        {/* 时间轴节点 */}
+                                        <div className="absolute -left-[31px] top-0 bg-white border-2 border-amber-400 w-4 h-4 rounded-full shadow-sm"></div>
+                                        
+                                        <div className="flex items-baseline gap-2 mb-1">
+                                            <span className="text-sm font-black text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{post.version || 'Update'}</span>
+                                            <span className="text-xs text-slate-400 flex items-center gap-1"><Calendar size={10}/> {new Date(post.createdAt).toLocaleDateString()}</span>
+                                            {isAdmin && <button onClick={() => handleDeletePost(post.id)} className="ml-auto text-slate-300 hover:text-red-500"><Trash2 size={14}/></button>}
+                                        </div>
+                                        
+                                        <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
+                                            {post.content}
+                                        </div>
+                                    </div>
+                                ))}
+                                {updatePosts.length === 0 && <div className="ml-6 text-slate-400 text-sm">暂无更新记录</div>}
+                            </div>
                         </div>
-                    ))}
+                    ) : (
+                        <div className="space-y-4 pb-24">
+                            {/* 反馈列表 */}
+                            {feedbackPosts.map(post => (
+                                <div key={post.id} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 group">
+                                    <div className="flex justify-between items-start mb-2">
+                                        <div className="flex items-center gap-2">
+                                            {post.type === 'advice' && <span className="bg-blue-50 text-blue-600 px-2 py-0.5 rounded-md text-[10px] font-bold">💡 建议</span>}
+                                            {post.type === 'bug' && <span className="bg-red-50 text-red-600 px-2 py-0.5 rounded-md text-[10px] font-bold">🐛 Bug</span>}
+                                            {post.type === 'chat' && <span className="bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-md text-[10px] font-bold">💬 闲聊</span>}
+                                            <span className="text-slate-300 text-[10px]">{new Date(post.createdAt).toLocaleDateString()}</span>
+                                        </div>
+                                        {isAdmin && <button onClick={() => handleDeletePost(post.id)} className="text-slate-200 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={14}/></button>}
+                                    </div>
+                                    <p className="text-sm text-slate-800 mb-3 leading-relaxed">{post.content}</p>
+                                    
+                                    {/* 管理员回复展示区 */}
+                                    {post.reply && (
+                                        <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 flex gap-3">
+                                            <div className="bg-amber-100 w-6 h-6 rounded-full flex items-center justify-center shrink-0"><UserCog size={12} className="text-amber-600"/></div>
+                                            <div>
+                                                <p className="text-[10px] font-bold text-slate-400 mb-0.5">管理员回复</p>
+                                                <p className="text-xs text-slate-700 font-medium">{post.reply}</p>
+                                            </div>
+                                        </div>
+                                    )}
+                                    {/* 回复输入框 */}
+                                    {isAdmin && !post.reply && (
+                                        <div className="mt-3 flex gap-2">
+                                            <input 
+                                                className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs focus:border-amber-400 outline-none"
+                                                placeholder="回复用户..."
+                                                value={replyContent[post.id] || ''}
+                                                onChange={e => setReplyContent({...replyContent, [post.id]: e.target.value})}
+                                            />
+                                            <button onClick={() => handleReply(post.id)} className="text-xs bg-slate-900 text-white px-3 rounded-lg font-bold">发送</button>
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+                             {feedbackPosts.length === 0 && <div className="text-center py-10 text-slate-400 text-sm">这里静悄悄的，快来许个愿吧~</div>}
+                        </div>
+                    )}
                 </div>
+
+                {/* 底部输入框 (仅在反馈 Tab 显示) */}
+                {activeTab === 'feedback' && (
+                    <div className="p-4 bg-white border-t border-slate-100 z-10">
+                        <div className="flex gap-2 mb-2">
+                            {[
+                                {id: 'advice', label: '建议', icon: <Sparkles size={12}/>}, 
+                                {id: 'bug', label: 'Bug', icon: <FileText size={12}/>}, 
+                                {id: 'chat', label: '闲聊', icon: <MessageCircle size={12}/>}
+                            ].map((t) => (
+                                <button 
+                                    key={t.id} 
+                                    onClick={() => setFeedbackType(t.id as any)}
+                                    className={`px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1 transition-all ${feedbackType === t.id ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                                >
+                                    {t.icon} {t.label}
+                                </button>
+                            ))}
+                        </div>
+                        <div className="flex gap-2">
+                            <input 
+                                type="text"
+                                value={newContent}
+                                onChange={e => setNewContent(e.target.value)}
+                                onKeyDown={e => e.key === 'Enter' && handlePost()}
+                                placeholder="写下你的想法..."
+                                className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-100 focus:border-amber-400 transition-all"
+                            />
+                            <button onClick={handlePost} className="bg-amber-500 hover:bg-amber-600 text-white w-12 h-12 rounded-xl flex items-center justify-center transition-colors shadow-sm shadow-amber-200">
+                                <Send size={18} className="ml-0.5"/>
+                            </button>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -763,8 +864,10 @@ export default function NSWFoodTracker() {
             </div>
             <div className="flex items-center gap-2 sm:gap-4">
                {/* 社区/反馈按钮 */}
-               <button onClick={() => setShowCommunity(true)} className="text-slate-400 hover:text-white transition-colors p-1.5" title="社区/更新日志">
+               <button onClick={() => setShowCommunity(true)} className="text-slate-400 hover:text-white transition-colors p-1.5 relative" title="社区/更新日志">
                    <MessageSquarePlus size={20} />
+                   {/* 只有管理员时显示红点提示，模拟有新消息 */}
+                   {isAdmin && <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full border border-slate-900"></span>}
                </button>
                
                <div className="flex bg-white/10 rounded-lg p-1 gap-1">
@@ -808,10 +911,16 @@ export default function NSWFoodTracker() {
                 </div>
               </div>
               
-              <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0 pt-1">
-                {cuisines.map(c => (
-                  <button key={c} onClick={() => setSelectedCuisine(c)} className={`whitespace-nowrap px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${selectedCuisine === c ? 'bg-amber-500 text-white border-amber-500 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300 hover:bg-slate-50'}`}>{c === 'All' ? '所有菜系' : c}</button>
-                ))}
+              <div className="flex items-center justify-between gap-2">
+                  <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0 pt-1 flex-1">
+                    {cuisines.map(c => (
+                      <button key={c} onClick={() => setSelectedCuisine(c)} className={`whitespace-nowrap px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${selectedCuisine === c ? 'bg-amber-500 text-white border-amber-500 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300 hover:bg-slate-50'}`}>{c === 'All' ? '所有菜系' : c}</button>
+                    ))}
+                  </div>
+                  {/* [新增] 筛选结果计数 */}
+                  <div className="text-xs font-bold text-slate-400 whitespace-nowrap hidden sm:block">
+                      共 {filteredList.length} 家
+                  </div>
               </div>
             </div>
 
@@ -833,7 +942,6 @@ export default function NSWFoodTracker() {
                     </div>
                     <div className="p-3 bg-white flex flex-col gap-2 border-t border-slate-100">
                        <div className="flex items-center gap-1.5 text-slate-500 text-xs"><MapPin size={12} className="shrink-0 text-slate-400" /><span className="truncate">{r.location}</span></div>
-                       {/* 管理员删除按钮占位符，实际在详情页操作更安全 */}
                     </div>
                   </div>
               ))}
