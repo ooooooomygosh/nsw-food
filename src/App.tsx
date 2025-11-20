@@ -1,9 +1,9 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronDown, Award, ExternalLink, Map as MapIcon, Filter, Heart, Trash2, SortAsc, Download, Upload, RefreshCw, Plus, Globe, LayoutGrid, MessageSquarePlus, Dices, Send, Sparkles, Smile, Lock, UserCog, Tag, Image as ImageIcon, FileText, MessageCircle, GitCommit, Calendar, ChevronRight, History, Clock, HelpCircle, ArrowRight, AlertTriangle } from 'lucide-react';
 import { db, auth, isFirebaseConfigured } from './lib/firebase';
-// [修复1] 从 firestore 移除 onAuthStateChanged
+// 从 firestore 移除 onAuthStateChanged
 import { collection, onSnapshot, doc, setDoc, updateDoc, addDoc, deleteDoc, query, orderBy } from 'firebase/firestore';
-// [修复1] 将 onAuthStateChanged 添加到 auth 导入中
+// 将 onAuthStateChanged 添加到 auth 导入中
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -161,7 +161,7 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
     const [postImage, setPostImage] = useState<string | null>(null);
     const [replyContent, setReplyContent] = useState<Record<string, string>>({}); 
     const [isSubmitting, setIsSubmitting] = useState(false);
-    const [hasAuth, setHasAuth] = useState(false); // [新增] Auth 状态
+    // [修改] 移除 hasAuth 强制检查，因为数据库是开放的
     
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -172,21 +172,12 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
         setPostImage(null);
     }, [activeTab]);
 
-    // 监听 Auth 状态，确保已登录
-    useEffect(() => {
-        if (auth) {
-            // [修复2] 添加类型注解 (user: any)
-            const unsubscribe = onAuthStateChanged(auth, (user: any) => {
-                setHasAuth(!!user);
-            });
-            return () => unsubscribe();
-        }
-    }, []);
+    // [移除] 强制 Auth 监听，因为会导致“正在连接”的假死状态
 
-    // 数据加载 - [修复] 恢复读取根目录
+    // 数据加载
     useEffect(() => {
         if (db && isFirebaseConfigured) {
-            // 直接读取根目录 'community_posts'，与你的截图一致
+            // 直接读取根目录 'community_posts'
             const q = query(collection(db, "community_posts"), orderBy("createdAt", "desc"));
             const unsubscribe = onSnapshot(q, (snapshot) => {
                 setPosts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Post)));
@@ -223,15 +214,6 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
         if (!newContent.trim() && !postImage) return; 
         if (activeTab === 'updates' && !newVersion.trim()) return alert("请输入版本号");
 
-        if (!hasAuth && isFirebaseConfigured) {
-             // 尝试再次登录
-             try {
-                 await signInAnonymously(auth);
-             } catch (e) {
-                 return alert("连接服务器失败，请刷新页面重试");
-             }
-        }
-
         setIsSubmitting(true);
 
         const newPost: Post = {
@@ -246,7 +228,7 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
 
         try {
             if (db && isFirebaseConfigured) {
-                // [修复] 写入根目录
+                // [修改] 直接写入，不检查 auth，因为规则允许公开写入
                 await addDoc(collection(db, "community_posts"), newPost);
             } else {
                 setPosts([newPost, ...posts]);
@@ -267,7 +249,6 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
         if (!reply) return;
         try {
             if (db && isFirebaseConfigured) {
-                // [修复] 操作根目录
                 await updateDoc(doc(db, "community_posts", postId), { reply });
             } else {
                 setPosts(posts.map(p => p.id === postId ? { ...p, reply } : p));
@@ -280,7 +261,6 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
          if (!isAdmin) return;
          if (confirm("确定删除？")) {
              if (db && isFirebaseConfigured) {
-                 // [修复] 操作根目录
                  await deleteDoc(doc(db, "community_posts", postId));
              } else {
                  setPosts(posts.filter(p => p.id !== postId));
@@ -318,12 +298,7 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
                 </div>
 
                 <div className="flex-1 overflow-y-auto bg-slate-50/50 p-6">
-                    {/* 如果未连接到 Firebase 且也不是本地模式，显示提示 */}
-                    {isFirebaseConfigured && !hasAuth && (
-                        <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl mb-4 flex items-center gap-2 text-amber-800 text-xs">
-                            <RefreshCw className="animate-spin" size={14}/> 正在连接服务器...
-                        </div>
-                    )}
+                    {/* [修改] 移除了 "正在连接服务器" 的 banner，因为它在无 Auth 模式下会误导用户 */}
 
                     {activeTab === 'updates' ? (
                         <div className="space-y-8 pl-2">
@@ -332,7 +307,7 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
                                     <h3 className="text-xs font-bold text-amber-700 mb-3 flex items-center gap-1"><UserCog size={14}/> 发布新版本</h3>
                                     <input type="text" placeholder="版本号 (e.g. v1.2.0)" className="w-full mb-2 px-3 py-2 bg-white rounded-lg text-sm border border-amber-200 outline-none focus:border-amber-400" value={newVersion} onChange={e => setNewVersion(e.target.value)} />
                                     <textarea placeholder="更新了什么..." className="w-full mb-2 px-3 py-2 bg-white rounded-lg text-sm border border-amber-200 outline-none focus:border-amber-400 h-20 resize-none" value={newContent} onChange={e => setNewContent(e.target.value)} />
-                                    <button onClick={handlePost} disabled={isSubmitting || !hasAuth} className="w-full py-2 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600 disabled:opacity-50">
+                                    <button onClick={handlePost} disabled={isSubmitting} className="w-full py-2 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600 disabled:opacity-50">
                                         {isSubmitting ? '发布中...' : '发布更新'}
                                     </button>
                                 </div>
@@ -423,13 +398,13 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
                                     value={newContent}
                                     onChange={e => setNewContent(e.target.value)}
                                     onKeyDown={e => e.key === 'Enter' && !isSubmitting && handlePost()}
-                                    placeholder={hasAuth ? "写点什么..." : "连接中..."}
+                                    placeholder="写点什么..."
                                     className="flex-1 bg-transparent py-3 text-sm outline-none"
-                                    disabled={isSubmitting || !hasAuth}
+                                    disabled={isSubmitting}
                                 />
                             </div>
                             
-                            <button onClick={handlePost} disabled={isSubmitting || !hasAuth} className="bg-amber-500 hover:bg-amber-600 text-white w-10 h-10 rounded-xl flex items-center justify-center transition-colors shadow-sm shadow-amber-200 disabled:opacity-50 disabled:cursor-not-allowed">
+                            <button onClick={handlePost} disabled={isSubmitting} className="bg-amber-500 hover:bg-amber-600 text-white w-10 h-10 rounded-xl flex items-center justify-center transition-colors shadow-sm shadow-amber-200 disabled:opacity-50 disabled:cursor-not-allowed">
                                 {isSubmitting ? <RefreshCw size={18} className="animate-spin"/> : <Send size={18} className="ml-0.5"/>}
                             </button>
                         </div>
@@ -775,11 +750,9 @@ export default function NSWFoodTracker() {
       }
   }, []);
 
-  // [修复] 监听 Auth 状态：确保有权限读写数据库
+  // 保持匿名认证，以防万一规则改变，但不再作为硬性条件
   useEffect(() => {
       if (isFirebaseConfigured) {
-           // 监听状态变化，如果未登录则匿名登录
-           // [修复2] 添加类型注解 (user: any)
            const unsubscribe = onAuthStateChanged(auth, (user: any) => {
                if (!user) {
                    signInAnonymously(auth).catch(console.error);
