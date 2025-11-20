@@ -1,16 +1,15 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronRight, Award, ExternalLink, Map as MapIcon, Filter, Camera, Share2, Image as ImageIcon, Heart, Trash2, SortAsc, Download, Upload, Zap, RefreshCw, Plus, Globe, LayoutGrid } from 'lucide-react';
+import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronDown, Award, ExternalLink, Map as MapIcon, Filter, Heart, Trash2, SortAsc, Download, Upload, RefreshCw, Plus, Globe, LayoutGrid, MessageSquarePlus, Dices, Send, Sparkles, Smile } from 'lucide-react';
 import { db, auth, isFirebaseConfigured } from './lib/firebase';
-import { collection, onSnapshot, doc, setDoc, updateDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, setDoc, updateDoc, addDoc } from 'firebase/firestore';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
-// --- 关键修改：从你新创建的文件导入数据 ---
-// 确保路径正确，指向 src/data/restaurants.ts
+// 导入数据
 import { BASE_DATA, Restaurant } from './data/restaurants';
 
-// 修复 Leaflet 默认图标缺失的问题
+// 修复 Leaflet 图标
 import icon from 'leaflet/dist/images/marker-icon.png';
 import iconShadow from 'leaflet/dist/images/marker-shadow.png';
 
@@ -54,7 +53,6 @@ const convertImageToBase64 = (file: File): Promise<string> => {
   });
 };
 
-// 根据菜系返回默认图 (当没有上传图片也没有官网图时使用)
 const getCuisineImage = (category: string, id: number) => {
   const images: Record<string, string[]> = {
     'Modern Australian': ['https://images.unsplash.com/photo-1544148103-0773bf10d330?w=600', 'https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=600'],
@@ -77,7 +75,7 @@ const getRestaurantCoverImage = (r: Restaurant): string => {
   return getCuisineImage(r.imageCategory, r.id);
 };
 
-// --- 组件 ---
+// --- 子组件 ---
 const StarRating = ({ rating, setRating, readonly = false, size = 'md' }: { rating: number, setRating: (r: number) => void, readonly?: boolean, size?: 'sm'|'md'|'lg' }) => {
   const starSize = size === 'sm' ? 14 : size === 'lg' ? 32 : 24;
   return (
@@ -96,6 +94,103 @@ const StarRating = ({ rating, setRating, readonly = false, size = 'md' }: { rati
     </div>
   );
 };
+
+// [新增] 吐槽/反馈 模态框
+const FeedbackModal = ({ onClose }: { onClose: () => void }) => {
+    const [content, setContent] = useState('');
+    const [type, setType] = useState('advice'); // advice, bug, chat
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
+    const handleSubmit = async () => {
+        if (!content.trim()) return alert("写点什么吧~");
+        setIsSubmitting(true);
+        
+        try {
+            if (db && isFirebaseConfigured) {
+                await addDoc(collection(db, "feedback"), {
+                    content,
+                    type,
+                    createdAt: new Date().toISOString(),
+                    userAgent: navigator.userAgent
+                });
+                alert("收到你的反馈啦！我们会尽快处理~");
+            } else {
+                // 本地模拟
+                console.log(`[Feedback Mock] ${type}: ${content}`);
+                await new Promise(resolve => setTimeout(resolve, 800));
+                alert("感谢吐槽！(本地演示模式已记录)");
+            }
+            onClose();
+        } catch (error) {
+            alert("发送失败，请稍后再试");
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    return (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl relative">
+                <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X size={20} /></button>
+                <h3 className="text-xl font-bold mb-2 flex items-center gap-2 text-slate-800"><MessageSquarePlus className="text-amber-500"/> 吐槽/许愿池</h3>
+                <p className="text-xs text-slate-500 mb-4">遇到 Bug？想加新功能？还是单纯想吐槽？畅所欲言！</p>
+                
+                <div className="flex gap-2 mb-4">
+                    {[{id: 'advice', label: '💡 提建议'}, {id: 'bug', label: '🐛 报Bug'}, {id: 'chat', label: '💬 随便聊'}].map(t => (
+                        <button key={t.id} onClick={() => setType(t.id)} className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all ${type === t.id ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
+                            {t.label}
+                        </button>
+                    ))}
+                </div>
+
+                <textarea 
+                    className="w-full h-32 p-3 bg-slate-50 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-amber-400 resize-none text-sm mb-4"
+                    placeholder="在这里写下你的想法..."
+                    value={content}
+                    onChange={e => setContent(e.target.value)}
+                />
+
+                <button 
+                    onClick={handleSubmit} 
+                    disabled={isSubmitting}
+                    className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold flex items-center justify-center gap-2 transition-colors disabled:opacity-70"
+                >
+                    {isSubmitting ? <RefreshCw className="animate-spin" size={18}/> : <Send size={18}/>}
+                    {isSubmitting ? '发送中...' : '发射！'}
+                </button>
+            </div>
+        </div>
+    );
+};
+
+// [新增] 随机选择结果 模态框
+const RandomResultModal = ({ r, onClose, onRetry, onViewDetails }: { r: Restaurant, onClose: () => void, onRetry: () => void, onViewDetails: () => void }) => {
+    return (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-300">
+            <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl relative animate-in zoom-in-95 duration-300 flex flex-col">
+                <div className="relative h-64">
+                    <img src={getRestaurantCoverImage(r)} className="w-full h-full object-cover"/>
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent"/>
+                    <div className="absolute top-4 right-4 bg-amber-500 text-white px-3 py-1 rounded-full text-xs font-bold shadow-lg animate-pulse">
+                        ✨ 命运的选择
+                    </div>
+                    <div className="absolute bottom-6 left-6 text-white">
+                        <p className="text-amber-400 font-bold text-xs tracking-widest uppercase mb-1">{r.cuisine}</p>
+                        <h2 className="text-3xl font-serif font-bold leading-none">{r.name}</h2>
+                    </div>
+                </div>
+                <div className="p-6 text-center space-y-4 bg-white">
+                    <p className="text-slate-600 text-sm">今天就去吃这家吧！<br/>位于 <span className="font-bold text-slate-800">{r.location}</span></p>
+                    <div className="grid grid-cols-2 gap-3">
+                        <button onClick={onRetry} className="py-3 rounded-xl border border-slate-200 font-bold text-slate-600 hover:bg-slate-50 flex items-center justify-center gap-2"><RefreshCw size={16}/> 再选一次</button>
+                        <button onClick={onViewDetails} className="py-3 rounded-xl bg-slate-900 text-white font-bold hover:bg-slate-800 flex items-center justify-center gap-2">查看详情 <ChevronDown className="-rotate-90" size={16}/></button>
+                    </div>
+                    <button onClick={onClose} className="text-slate-400 text-xs hover:text-slate-600 mt-2">关闭</button>
+                </div>
+            </div>
+        </div>
+    )
+}
 
 const AddRestaurantModal = ({ onClose, onAdd }: { onClose: () => void, onAdd: (r: Partial<Restaurant>) => void }) => {
     const [formData, setFormData] = useState({ name: '', location: '', cuisine: 'Modern Australian', priceTier: '$$' });
@@ -171,8 +266,6 @@ const RestaurantModal = ({ r, onClose, onUpdate }: { r: Restaurant, onClose: () 
                 <a href={xhsUrl} target="_blank" rel="noopener noreferrer" className="bg-red-50 border border-red-100 py-2.5 rounded-xl flex flex-col items-center justify-center gap-1 text-xs font-bold text-red-600 shadow-sm hover:bg-red-100"><Heart size={18} className="fill-red-600"/> 小红书</a>
                 <a href={tripAdvisorUrl} target="_blank" rel="noopener noreferrer" className="bg-green-50 border border-green-100 py-2.5 rounded-xl flex flex-col items-center justify-center gap-1 text-xs font-bold text-green-700 shadow-sm hover:bg-green-100"><Globe size={18} className="text-green-600"/> 评分</a>
              </div>
-             
-             {/* 显示 CSV 中的官网链接 */}
              {r.sourceUrl && (
                 <a href={r.sourceUrl} target="_blank" rel="noopener noreferrer" className="block w-full text-center py-3 bg-slate-100 text-slate-600 rounded-xl text-sm font-bold hover:bg-slate-200 transition-colors border border-slate-200">
                     访问官方网站
@@ -214,21 +307,30 @@ export default function NSWFoodTracker() {
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
-  // 视图状态：'list' | 'map' | 'stats'
   const [view, setView] = useState<'list' | 'map' | 'stats'>('list');
+  
+  // 筛选和排序状态
   const [filter, setFilter] = useState('');
   const [selectedRegion, setSelectedRegion] = useState('All');
   const [selectedCuisine, setSelectedCuisine] = useState('All');
   const [sortBy, setSortBy] = useState<'default' | 'rating' | 'price'>('default');
-  const [activeRestaurant, setActiveRestaurant] = useState<Restaurant | null>(null);
   const [showVisitedOnly, setShowVisitedOnly] = useState(false);
+  
+  // 弹窗状态
+  const [activeRestaurant, setActiveRestaurant] = useState<Restaurant | null>(null);
+  const [showFeedback, setShowFeedback] = useState(false); // [新增] 吐槽弹窗
+  const [randomRestaurant, setRandomRestaurant] = useState<Restaurant | null>(null); // [新增] 随机结果
+
   const importInputRef = useRef<HTMLInputElement>(null);
 
-  // 智能同步逻辑：使用 BASE_DATA（来自 restaurants.ts）
+  // --- 分页/懒加载状态 ---
+  const [visibleCount, setVisibleCount] = useState(12); // 初始显示12个
+  const loadMoreRef = useRef<HTMLDivElement>(null); // 底部锚点
+
+  // 同步逻辑
   const checkForNewCodeData = async (existingData: Restaurant[]) => {
      if (!db || !isFirebaseConfigured) return;
      const existingIds = new Set(existingData.map(r => r.id));
-     // 这里使用 BASE_DATA 而不是以前的 INITIAL_DATA
      const missingRestaurants = BASE_DATA.filter(r => r.id && !existingIds.has(r.id));
 
      if (missingRestaurants.length > 0) {
@@ -254,7 +356,7 @@ export default function NSWFoodTracker() {
       });
       return () => unsubscribe();
     } else {
-      const saved = localStorage.getItem('nsw_food_list_v7'); // 更新本地版本号
+      const saved = localStorage.getItem('nsw_food_list_v7');
       let data: Restaurant[] = [];
       if (saved) {
         const parsed = JSON.parse(saved);
@@ -285,29 +387,79 @@ export default function NSWFoodTracker() {
     const total = restaurants.length;
     const percentage = total > 0 ? Math.round((visited.length / total) * 100) : 0;
     const totalSpent = visited.reduce((acc, curr) => acc + (Number(curr.userPrice) || 0), 0);
-    // [修复] 添加了 || 0 来处理 undefined
     const avgRating = visited.length > 0 ? (visited.reduce((acc, curr) => acc + (curr.userRating || 0), 0) / visited.length).toFixed(1) : "0.0";
     const cuisineCounts = visited.reduce<Record<string, number>>((acc, curr) => { acc[curr.cuisine] = (acc[curr.cuisine] || 0) + 1; return acc; }, {});
     const topCuisines = Object.entries(cuisineCounts).sort(([,a], [,b]) => b - a).slice(0, 3);
     return { visited: visited.length, total, percentage, totalSpent, topCuisines, averageRating: avgRating };
   }, [restaurants]);
 
-  const regions = ['All', ...new Set(restaurants.map(r => r.region))].sort();
-  const cuisines = ['All', ...new Set(restaurants.map(r => r.cuisine))].sort();
+  // 获取所有地区列表，用于下拉框
+  const regions = useMemo(() => ['All', ...new Set(restaurants.map(r => r.region))].sort(), [restaurants]);
+  const cuisines = useMemo(() => ['All', ...new Set(restaurants.map(r => r.cuisine))].sort(), [restaurants]);
   
+  // --- 核心筛选逻辑 ---
   const filteredList = useMemo(() => {
     let res = restaurants.filter(r => {
+      // 搜索匹配 (名称或地点)
       const matchesSearch = r.name.toLowerCase().includes(filter.toLowerCase()) || r.location.toLowerCase().includes(filter.toLowerCase());
+      // 地区匹配 (支持多重筛选)
       const matchesRegion = selectedRegion === 'All' || r.region === selectedRegion;
+      // 菜系匹配 (支持多重筛选)
       const matchesCuisine = selectedCuisine === 'All' || r.cuisine === selectedCuisine;
+      // 已访问匹配
       const matchesVisited = showVisitedOnly ? r.visited : true;
+      
       return matchesSearch && matchesRegion && matchesCuisine && matchesVisited;
     });
-    // [修复] 添加了 || 0 来处理 undefined
+
     if (sortBy === 'rating') res.sort((a, b) => (b.userRating || 0) - (a.userRating || 0));
     else if (sortBy === 'price') res.sort((a, b) => (Number(b.userPrice) || 0) - (Number(a.userPrice) || 0));
     return res;
   }, [restaurants, filter, selectedRegion, selectedCuisine, showVisitedOnly, sortBy]);
+
+  // [新增] 随机选择逻辑
+  const handleRandomPick = () => {
+      const pool = filteredList.length > 0 ? filteredList : restaurants;
+      if (pool.length === 0) return alert("当前列表为空，没法选呀！");
+      
+      // 简单的随机动画效果
+      let count = 0;
+      const interval = setInterval(() => {
+          const temp = pool[Math.floor(Math.random() * pool.length)];
+          // 这里可以做一个简单的UI震动或者闪烁，但为了简洁直接出结果
+          count++;
+          if (count > 5) {
+              clearInterval(interval);
+              setRandomRestaurant(temp);
+          }
+      }, 50);
+  };
+
+  // 当筛选条件改变时，重置显示数量为初始值，并滚动到顶部
+  useEffect(() => {
+      setVisibleCount(12);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [filter, selectedRegion, selectedCuisine, sortBy, showVisitedOnly, view]);
+
+  // --- 无限滚动监听器 ---
+  useEffect(() => {
+    const observer = new IntersectionObserver((entries) => {
+        // 如果底部锚点出现在视口中，且当前显示的少于总数
+        if (entries[0].isIntersecting && visibleCount < filteredList.length) {
+            // 增加显示数量 (例如每次加12个)
+            setVisibleCount(prev => prev + 12);
+        }
+    }, { threshold: 0.1 });
+
+    if (loadMoreRef.current) {
+        observer.observe(loadMoreRef.current);
+    }
+
+    return () => observer.disconnect();
+  }, [visibleCount, filteredList.length]);
+
+  // 获取当前需要渲染的列表切片
+  const visibleRestaurants = filteredList.slice(0, visibleCount);
 
   const handleUpdateRestaurant = async (id: number, data: Partial<Restaurant>) => {
     const newData = { ...data, visited: true, visitedDate: new Date().toISOString().split('T')[0] };
@@ -367,7 +519,12 @@ export default function NSWFoodTracker() {
                 <p className="text-[10px] text-amber-400/80 font-bold tracking-wider uppercase mt-0.5">The Ultimate List</p>
               </div>
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 sm:gap-4">
+               {/* [新增] 吐槽按钮 */}
+               <button onClick={() => setShowFeedback(true)} className="text-slate-400 hover:text-white transition-colors p-1.5" title="吐槽/反馈">
+                   <MessageSquarePlus size={20} />
+               </button>
+               
                <div className="flex bg-white/10 rounded-lg p-1 gap-1">
                    <button onClick={() => setView('list')} className={`p-1.5 rounded ${view === 'list' ? 'bg-white text-slate-900' : 'text-slate-300'}`}><LayoutGrid size={16}/></button>
                    <button onClick={() => setView('map')} className={`p-1.5 rounded ${view === 'map' ? 'bg-white text-slate-900' : 'text-slate-300'}`}><MapIcon size={16}/></button>
@@ -382,23 +539,48 @@ export default function NSWFoodTracker() {
         {view === 'list' ? (
           <>
             <div className="sticky top-[68px] z-30 bg-slate-100/95 backdrop-blur-sm pb-4 space-y-3 pt-2">
-              <div className="flex flex-wrap gap-2">
-                <div className="relative flex-1 min-w-[180px]">
-                  <Search className="absolute left-3.5 top-3 text-slate-400" size={18} />
-                  <input type="text" placeholder="搜餐厅、菜系..." className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 shadow-sm rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-400 transition-all" value={filter} onChange={(e) => setFilter(e.target.value)} />
+              <div className="flex flex-wrap gap-2 items-center">
+                {/* 搜索框 */}
+                <div className="relative flex-grow min-w-[140px]">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                  <input type="text" placeholder="搜餐厅..." className="w-full pl-9 pr-4 py-2.5 bg-white border border-slate-200 shadow-sm rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm" value={filter} onChange={(e) => setFilter(e.target.value)} />
                 </div>
-                <button onClick={() => setShowAddModal(true)} className="px-3 rounded-xl flex items-center gap-2 text-sm font-bold transition-all border shadow-sm bg-slate-900 text-white border-slate-900 hover:bg-slate-800"><Plus size={18} /><span className="hidden sm:inline">添加</span></button>
-                <button onClick={() => setSortBy(prev => prev === 'default' ? 'rating' : prev === 'rating' ? 'price' : 'default')} className={`px-3 rounded-xl flex items-center gap-2 text-sm font-bold transition-all border shadow-sm ${sortBy !== 'default' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200'}`}><SortAsc size={18} /></button>
-                <button onClick={() => setShowVisitedOnly(!showVisitedOnly)} className={`px-3 rounded-xl flex items-center gap-2 text-sm font-bold transition-all border shadow-sm ${showVisitedOnly ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-slate-600 border-slate-200'}`}><CheckCircle size={18} /></button>
+                
+                {/* 地区筛选下拉框 */}
+                <div className="relative min-w-[120px] sm:max-w-[160px]">
+                    <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500"><MapPin size={14} /></div>
+                    <select 
+                        value={selectedRegion} 
+                        onChange={(e) => setSelectedRegion(e.target.value)}
+                        className="w-full pl-8 pr-8 py-2.5 bg-white border border-slate-200 shadow-sm rounded-xl appearance-none text-sm font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-400 cursor-pointer truncate"
+                    >
+                        {regions.map(r => <option key={r} value={r}>{r === 'All' ? '全悉尼' : r}</option>)}
+                    </select>
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400"><ChevronDown size={14} /></div>
+                </div>
+
+                {/* 按钮组 */}
+                <div className="flex gap-2">
+                    {/* [新增] 随机选择按钮 */}
+                    <button onClick={handleRandomPick} className="p-2.5 rounded-xl flex items-center justify-center transition-all border shadow-sm bg-amber-500 text-white border-amber-500 hover:bg-amber-600 hover:shadow-md" title="今天吃什么？"><Dices size={18} /></button>
+                    
+                    <button onClick={() => setShowAddModal(true)} className="p-2.5 rounded-xl flex items-center justify-center transition-all border shadow-sm bg-slate-900 text-white border-slate-900 hover:bg-slate-800" title="添加餐厅"><Plus size={18} /></button>
+                    <button onClick={() => setSortBy(prev => prev === 'default' ? 'rating' : prev === 'rating' ? 'price' : 'default')} className={`p-2.5 rounded-xl flex items-center justify-center transition-all border shadow-sm ${sortBy !== 'default' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200'}`} title="排序"><SortAsc size={18} /></button>
+                    <button onClick={() => setShowVisitedOnly(!showVisitedOnly)} className={`p-2.5 rounded-xl flex items-center justify-center transition-all border shadow-sm ${showVisitedOnly ? 'bg-green-500 text-white border-green-500' : 'bg-white text-slate-600 border-slate-200'}`} title="只看打卡"><CheckCircle size={18} /></button>
+                </div>
               </div>
-              <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0">
+              
+              {/* 菜系横向滚动条 */}
+              <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0 pt-1">
                 {cuisines.map(c => (
-                  <button key={c} onClick={() => setSelectedCuisine(c)} className={`whitespace-nowrap px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${selectedCuisine === c ? 'bg-amber-500 text-white border-amber-500 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300 hover:bg-slate-50'}`}>{c}</button>
+                  <button key={c} onClick={() => setSelectedCuisine(c)} className={`whitespace-nowrap px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${selectedCuisine === c ? 'bg-amber-500 text-white border-amber-500 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300 hover:bg-slate-50'}`}>{c === 'All' ? '所有菜系' : c}</button>
                 ))}
               </div>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 pb-20">
-              {filteredList.map(r => (
+
+            {/* 餐厅列表 (使用 visibleRestaurants 进行渲染) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 pb-4">
+              {visibleRestaurants.map(r => (
                   <div key={r.id} onClick={() => setActiveRestaurant(r)} className="group bg-white rounded-2xl overflow-hidden shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 cursor-pointer border border-slate-200 flex flex-col relative">
                     <div className="h-48 overflow-hidden relative bg-slate-100">
                       <img src={getRestaurantCoverImage(r)} alt={r.name} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" loading="lazy" />
@@ -409,7 +591,6 @@ export default function NSWFoodTracker() {
                         <h3 className="font-serif font-bold text-xl leading-tight mb-1 text-shadow-sm truncate">{r.name}</h3>
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-1.5 text-xs text-slate-300 font-medium"><span>{r.cuisine}</span><span className="w-1 h-1 rounded-full bg-slate-400"/><span>{r.priceTier}</span></div>
-                          {/* [修复] 添加了 || 0 来处理 undefined */}
                           {(r.userRating || 0) > 0 && <div className="flex items-center gap-1 bg-white/10 backdrop-blur-sm px-2 py-0.5 rounded-full"><Star size={12} className="fill-amber-400 text-amber-400" /><span className="text-xs font-bold text-amber-400">{r.userRating}</span></div>}
                         </div>
                       </div>
@@ -420,6 +601,20 @@ export default function NSWFoodTracker() {
                   </div>
               ))}
             </div>
+            
+            {/* 懒加载锚点 */}
+            {filteredList.length > visibleCount && (
+               <div ref={loadMoreRef} className="py-8 flex justify-center items-center text-slate-400 text-sm">
+                  <RefreshCw className="animate-spin mr-2" size={16}/> 正在加载更多...
+               </div>
+            )}
+            {filteredList.length === 0 && (
+                <div className="text-center py-20 text-slate-400 flex flex-col items-center gap-2">
+                    <Smile size={40}/>
+                    <p>没有找到符合条件的餐厅</p>
+                    <button onClick={() => {setFilter(''); setSelectedRegion('All'); setSelectedCuisine('All');}} className="text-amber-500 text-sm font-bold hover:underline">清除所有筛选</button>
+                </div>
+            )}
           </>
         ) : view === 'map' ? (
           <div className="h-full w-full rounded-2xl overflow-hidden border border-slate-200 shadow-inner relative">
@@ -462,8 +657,12 @@ export default function NSWFoodTracker() {
           </div>
         )}
       </main>
+      
+      {/* 弹窗组件挂载 */}
       {activeRestaurant && <RestaurantModal r={activeRestaurant} onClose={() => setActiveRestaurant(null)} onUpdate={handleUpdateRestaurant} />}
       {showAddModal && <AddRestaurantModal onClose={() => setShowAddModal(false)} onAdd={handleAddCustomRestaurant} />}
+      {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} />}
+      {randomRestaurant && <RandomResultModal r={randomRestaurant} onClose={() => setRandomRestaurant(null)} onRetry={handleRandomPick} onViewDetails={() => { setRandomRestaurant(null); setActiveRestaurant(randomRestaurant); }} />}
     </div>
   );
 }
