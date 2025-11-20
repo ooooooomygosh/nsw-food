@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronDown, Award, ExternalLink, Map as MapIcon, Filter, Heart, Trash2, SortAsc, Download, Upload, RefreshCw, Plus, Globe, LayoutGrid, MessageSquarePlus, Dices, Send, Sparkles, Smile, Lock, UserCog, Tag, Image as ImageIcon, FileText, MessageCircle, GitCommit, Calendar, ChevronRight, History, Clock, HelpCircle, ArrowRight } from 'lucide-react';
 import { db, auth, isFirebaseConfigured } from './lib/firebase';
 import { collection, onSnapshot, doc, setDoc, updateDoc, addDoc, deleteDoc, query, orderBy } from 'firebase/firestore';
+import { signInAnonymously } from 'firebase/auth'; // [修复] 重新引入认证
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -35,7 +36,7 @@ interface Post {
     content: string;
     version?: string;
     type: 'advice' | 'bug' | 'chat' | 'update'; 
-    image?: string; // [新增] 支持图片
+    image?: string; 
     createdAt: string;
     reply?: string;
     isAdminPost?: boolean;
@@ -51,7 +52,7 @@ const convertImageToBase64 = (file: File): Promise<string> => {
       img.src = event.target?.result as string;
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 800; // 稍微调大一点
+        const MAX_WIDTH = 800; 
         const scaleSize = MAX_WIDTH / img.width;
         canvas.width = MAX_WIDTH;
         canvas.height = img.height * scaleSize;
@@ -106,7 +107,7 @@ const StarRating = ({ rating, setRating, readonly = false, size = 'md' }: { rati
   );
 };
 
-// [新增] 新手引导组件
+// 新手引导组件
 const IntroGuide = ({ onClose }: { onClose: () => void }) => {
     const [step, setStep] = useState(0);
     
@@ -152,14 +153,21 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
     const [activeTab, setActiveTab] = useState<'updates' | 'feedback'>('updates');
     const [posts, setPosts] = useState<Post[]>([]);
     
-    // 发帖状态
     const [newContent, setNewContent] = useState('');
     const [newVersion, setNewVersion] = useState(''); 
     const [feedbackType, setFeedbackType] = useState<'advice' | 'bug' | 'chat'>('advice');
-    const [postImage, setPostImage] = useState<string | null>(null); // [新增] 图片状态
+    const [postImage, setPostImage] = useState<string | null>(null);
     const [replyContent, setReplyContent] = useState<Record<string, string>>({}); 
+    const [isSubmitting, setIsSubmitting] = useState(false); // [新增] 发送Loading状态
     
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    // 切换Tab时清理输入框
+    useEffect(() => {
+        setNewContent('');
+        setNewVersion('');
+        setPostImage(null);
+    }, [activeTab]);
 
     // 数据加载
     useEffect(() => {
@@ -191,13 +199,14 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
             const base64 = await convertImageToBase64(e.target.files[0]);
             setPostImage(base64);
         }
-        // 清空 input value，允许重复选择同一张图
         if (e.target) e.target.value = '';
     };
 
     const handlePost = async () => {
-        if (!newContent.trim() && !postImage) return; // 允许只发图片
+        if (!newContent.trim() && !postImage) return; 
         if (activeTab === 'updates' && !newVersion.trim()) return alert("请输入版本号");
+
+        setIsSubmitting(true);
 
         const newPost: Post = {
             id: Date.now().toString(),
@@ -209,25 +218,34 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
             isAdminPost: activeTab === 'updates'
         };
 
-        if (db && isFirebaseConfigured) {
-            await addDoc(collection(db, "community_posts"), newPost);
-        } else {
-            setPosts([newPost, ...posts]);
+        try {
+            if (db && isFirebaseConfigured) {
+                await addDoc(collection(db, "community_posts"), newPost);
+            } else {
+                setPosts([newPost, ...posts]);
+            }
+            setNewContent('');
+            setNewVersion('');
+            setPostImage(null);
+        } catch (error) {
+            console.error("Post failed:", error);
+            alert("发送失败，请检查网络或刷新重试");
+        } finally {
+            setIsSubmitting(false);
         }
-        setNewContent('');
-        setNewVersion('');
-        setPostImage(null);
     };
 
     const handleReply = async (postId: string) => {
         const reply = replyContent[postId];
         if (!reply) return;
-        if (db && isFirebaseConfigured) {
-            await updateDoc(doc(db, "community_posts", postId), { reply });
-        } else {
-            setPosts(posts.map(p => p.id === postId ? { ...p, reply } : p));
-        }
-        setReplyContent(prev => ({ ...prev, [postId]: '' }));
+        try {
+            if (db && isFirebaseConfigured) {
+                await updateDoc(doc(db, "community_posts", postId), { reply });
+            } else {
+                setPosts(posts.map(p => p.id === postId ? { ...p, reply } : p));
+            }
+            setReplyContent(prev => ({ ...prev, [postId]: '' }));
+        } catch(e) { alert("回复失败"); }
     };
 
     const handleDeletePost = async (postId: string) => {
@@ -278,7 +296,9 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
                                     <h3 className="text-xs font-bold text-amber-700 mb-3 flex items-center gap-1"><UserCog size={14}/> 发布新版本</h3>
                                     <input type="text" placeholder="版本号 (e.g. v1.2.0)" className="w-full mb-2 px-3 py-2 bg-white rounded-lg text-sm border border-amber-200 outline-none focus:border-amber-400" value={newVersion} onChange={e => setNewVersion(e.target.value)} />
                                     <textarea placeholder="更新了什么..." className="w-full mb-2 px-3 py-2 bg-white rounded-lg text-sm border border-amber-200 outline-none focus:border-amber-400 h-20 resize-none" value={newContent} onChange={e => setNewContent(e.target.value)} />
-                                    <button onClick={handlePost} className="w-full py-2 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600">发布更新</button>
+                                    <button onClick={handlePost} disabled={isSubmitting} className="w-full py-2 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600 disabled:opacity-50">
+                                        {isSubmitting ? '发布中...' : '发布更新'}
+                                    </button>
                                 </div>
                             )}
                             <div className="relative border-l-2 border-slate-200 space-y-8">
@@ -366,14 +386,15 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
                                     type="text"
                                     value={newContent}
                                     onChange={e => setNewContent(e.target.value)}
-                                    onKeyDown={e => e.key === 'Enter' && handlePost()}
+                                    onKeyDown={e => e.key === 'Enter' && !isSubmitting && handlePost()}
                                     placeholder="写点什么..."
                                     className="flex-1 bg-transparent py-3 text-sm outline-none"
+                                    disabled={isSubmitting}
                                 />
                             </div>
                             
-                            <button onClick={handlePost} className="bg-amber-500 hover:bg-amber-600 text-white w-10 h-10 rounded-xl flex items-center justify-center transition-colors shadow-sm shadow-amber-200">
-                                <Send size={18} className="ml-0.5"/>
+                            <button onClick={handlePost} disabled={isSubmitting} className="bg-amber-500 hover:bg-amber-600 text-white w-10 h-10 rounded-xl flex items-center justify-center transition-colors shadow-sm shadow-amber-200 disabled:opacity-50 disabled:cursor-not-allowed">
+                                {isSubmitting ? <RefreshCw size={18} className="animate-spin"/> : <Send size={18} className="ml-0.5"/>}
                             </button>
                         </div>
                     </div>
@@ -692,20 +713,17 @@ export default function NSWFoodTracker() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [view, setView] = useState<'list' | 'map' | 'stats'>('list');
   
-  // 筛选和排序状态
   const [filter, setFilter] = useState('');
   const [selectedRegion, setSelectedRegion] = useState('All');
   const [selectedCuisine, setSelectedCuisine] = useState('All');
   const [sortBy, setSortBy] = useState<'default' | 'rating' | 'price'>('default');
   const [showVisitedOnly, setShowVisitedOnly] = useState(false);
   
-  // 弹窗状态
   const [activeRestaurant, setActiveRestaurant] = useState<Restaurant | null>(null);
   const [showCommunity, setShowCommunity] = useState(false); 
   const [randomRestaurant, setRandomRestaurant] = useState<Restaurant | null>(null);
-  const [showIntro, setShowIntro] = useState(false); // [新增] 新手引导状态
+  const [showIntro, setShowIntro] = useState(false); 
   
-  // 管理员状态
   const [isAdmin, setIsAdmin] = useState(false);
   const [showAdminLogin, setShowAdminLogin] = useState(false);
 
@@ -713,7 +731,6 @@ export default function NSWFoodTracker() {
   const [visibleCount, setVisibleCount] = useState(12); 
   const loadMoreRef = useRef<HTMLDivElement>(null); 
 
-  // [新增] 检查是否首次访问
   useEffect(() => {
       const hasSeenIntro = localStorage.getItem('nsw_food_intro_shown');
       if (!hasSeenIntro) {
@@ -722,7 +739,13 @@ export default function NSWFoodTracker() {
       }
   }, []);
 
-  // 同步逻辑
+  // [修复] 匿名认证逻辑：解决“无法连接数据库”的问题
+  useEffect(() => {
+      if (isFirebaseConfigured) {
+           signInAnonymously(auth).catch(console.error);
+      }
+  }, []);
+
   const checkForNewCodeData = async (existingData: Restaurant[]) => {
      if (!db || !isFirebaseConfigured) return;
      const existingIds = new Set(existingData.map(r => r.id));
@@ -903,15 +926,12 @@ export default function NSWFoodTracker() {
               </div>
             </div>
             <div className="flex items-center gap-2 sm:gap-4">
-               {/* 新手引导按钮 */}
                <button onClick={() => setShowIntro(true)} className="text-slate-400 hover:text-white transition-colors p-1.5" title="使用指南">
                    <HelpCircle size={20} />
                </button>
 
-               {/* 社区/反馈按钮 */}
                <button onClick={() => setShowCommunity(true)} className="text-slate-400 hover:text-white transition-colors p-1.5 relative" title="社区/更新日志">
                    <MessageSquarePlus size={20} />
-                   {/* 只有管理员时显示红点提示，模拟有新消息 */}
                    {isAdmin && <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full border border-slate-900"></span>}
                </button>
                
@@ -930,7 +950,6 @@ export default function NSWFoodTracker() {
           <>
             <div className="sticky top-[68px] z-30 bg-slate-100/95 backdrop-blur-sm pb-4 space-y-3 pt-2">
               <div className="flex flex-wrap gap-2 items-center">
-                {/* 搜索框 */}
                 <div className="relative flex-grow min-w-[140px]">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
                   <input type="text" placeholder="搜餐厅..." className="w-full pl-9 pr-4 py-2.5 bg-white border border-slate-200 shadow-sm rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm" value={filter} onChange={(e) => setFilter(e.target.value)} />
@@ -962,7 +981,6 @@ export default function NSWFoodTracker() {
                       <button key={c} onClick={() => setSelectedCuisine(c)} className={`whitespace-nowrap px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${selectedCuisine === c ? 'bg-amber-500 text-white border-amber-500 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300 hover:bg-slate-50'}`}>{c === 'All' ? '所有菜系' : c}</button>
                     ))}
                   </div>
-                  {/* [新增] 筛选结果计数 */}
                   <div className="text-xs font-bold text-slate-400 whitespace-nowrap hidden sm:block">
                       共 {filteredList.length} 家
                   </div>
@@ -1044,7 +1062,6 @@ export default function NSWFoodTracker() {
              </div>
              <div className="flex gap-2 justify-center py-4"><button onClick={handleExport} className="px-4 py-2 bg-white rounded-xl text-sm font-bold shadow-sm text-slate-600 flex items-center gap-2"><Download size={16}/> 备份数据</button><button onClick={() => importInputRef.current?.click()} className="px-4 py-2 bg-white rounded-xl text-sm font-bold shadow-sm text-slate-600 flex items-center gap-2"><Upload size={16}/> 恢复数据</button><input type="file" ref={importInputRef} className="hidden" onChange={handleImport} /></div>
              
-             {/* 管理员登录入口 */}
              <div className="text-center pt-10">
                  {!isAdmin ? (
                      <button onClick={() => setShowAdminLogin(true)} className="text-xs text-slate-300 hover:text-slate-500 flex items-center justify-center gap-1 mx-auto"><Lock size={12}/> 管理员登录</button>
@@ -1056,7 +1073,6 @@ export default function NSWFoodTracker() {
         )}
       </main>
       
-      {/* 弹窗组件挂载 */}
       {activeRestaurant && <RestaurantModal r={activeRestaurant} onClose={() => setActiveRestaurant(null)} onUpdate={handleUpdateRestaurant} onDelete={handleDeleteRestaurant} isAdmin={isAdmin} />}
       {showAddModal && <AddRestaurantModal onClose={() => setShowAddModal(false)} onAdd={handleAddCustomRestaurant} regions={regions} cuisines={cuisines} />}
       {showCommunity && <CommunityBoard isAdmin={isAdmin} onClose={() => setShowCommunity(false)} />}
