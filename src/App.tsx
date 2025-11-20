@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronDown, Award, ExternalLink, Map as MapIcon, Filter, Heart, Trash2, SortAsc, Download, Upload, RefreshCw, Plus, Globe, LayoutGrid, MessageSquarePlus, Dices, Send, Sparkles, Smile } from 'lucide-react';
+import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronDown, Award, ExternalLink, Map as MapIcon, Filter, Heart, Trash2, SortAsc, Download, Upload, RefreshCw, Plus, Globe, LayoutGrid, MessageSquarePlus, Dices, Send, Sparkles, Smile, Lock, UserCog, Tag, Image as ImageIcon, FileText, MessageCircle } from 'lucide-react';
 import { db, auth, isFirebaseConfigured } from './lib/firebase';
-import { collection, onSnapshot, doc, setDoc, updateDoc, addDoc } from 'firebase/firestore';
+import { collection, onSnapshot, doc, setDoc, updateDoc, addDoc, deleteDoc, query, orderBy } from 'firebase/firestore';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -28,6 +28,15 @@ interface Stats {
   totalSpent: number;
   averageRating: string;
   topCuisines: [string, number][];
+}
+
+interface Post {
+    id: string;
+    content: string;
+    type: 'advice' | 'bug' | 'chat' | 'update'; // update 是管理员专用的更新日志
+    createdAt: string;
+    reply?: string; // 管理员回复
+    isAdminPost?: boolean;
 }
 
 // --- 工具函数 ---
@@ -95,75 +104,155 @@ const StarRating = ({ rating, setRating, readonly = false, size = 'md' }: { rati
   );
 };
 
-// [新增] 吐槽/反馈 模态框
-const FeedbackModal = ({ onClose }: { onClose: () => void }) => {
-    const [content, setContent] = useState('');
-    const [type, setType] = useState('advice'); // advice, bug, chat
-    const [isSubmitting, setIsSubmitting] = useState(false);
+// [新增] 社区/更新日志板块
+const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () => void }) => {
+    const [posts, setPosts] = useState<Post[]>([]);
+    const [newContent, setNewContent] = useState('');
+    const [postType, setPostType] = useState<'advice' | 'bug' | 'chat' | 'update'>('advice');
+    const [replyContent, setReplyContent] = useState<Record<string, string>>({}); // 暂存回复内容
 
-    const handleSubmit = async () => {
-        if (!content.trim()) return alert("写点什么吧~");
-        setIsSubmitting(true);
-        
-        try {
-            if (db && isFirebaseConfigured) {
-                await addDoc(collection(db, "feedback"), {
-                    content,
-                    type,
-                    createdAt: new Date().toISOString(),
-                    userAgent: navigator.userAgent
-                });
-                alert("收到你的反馈啦！我们会尽快处理~");
+    // 模拟初始数据或从Firebase加载
+    useEffect(() => {
+        if (db && isFirebaseConfigured) {
+            const q = query(collection(db, "community_posts"), orderBy("createdAt", "desc"));
+            const unsubscribe = onSnapshot(q, (snapshot) => {
+                setPosts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Post)));
+            });
+            return () => unsubscribe();
+        } else {
+            // 本地模拟数据
+            const localPosts = localStorage.getItem('nsw_food_community_posts');
+            if (localPosts) {
+                setPosts(JSON.parse(localPosts));
             } else {
-                // 本地模拟
-                console.log(`[Feedback Mock] ${type}: ${content}`);
-                await new Promise(resolve => setTimeout(resolve, 800));
-                alert("感谢吐槽！(本地演示模式已记录)");
+                setPosts([
+                    { id: '1', content: 'V1.0 版本正式上线！欢迎大家使用 NSW 美食摘星。', type: 'update', createdAt: new Date().toISOString(), isAdminPost: true },
+                    { id: '2', content: '希望能增加一个按价格筛选的功能~', type: 'advice', createdAt: new Date(Date.now() - 86400000).toISOString(), reply: '已在 V1.1 更新中添加该功能！' }
+                ]);
             }
-            onClose();
-        } catch (error) {
-            alert("发送失败，请稍后再试");
-        } finally {
-            setIsSubmitting(false);
         }
+    }, []);
+
+    useEffect(() => {
+        if (!isFirebaseConfigured) localStorage.setItem('nsw_food_community_posts', JSON.stringify(posts));
+    }, [posts]);
+
+    const handlePost = async () => {
+        if (!newContent.trim()) return;
+        const newPost: Post = {
+            id: Date.now().toString(),
+            content: newContent,
+            type: isAdmin && postType === 'update' ? 'update' : postType === 'update' ? 'chat' : postType, // 非管理员不能发 update
+            createdAt: new Date().toISOString(),
+            isAdminPost: isAdmin && postType === 'update'
+        };
+
+        if (db && isFirebaseConfigured) {
+            await addDoc(collection(db, "community_posts"), newPost);
+        } else {
+            setPosts([newPost, ...posts]);
+        }
+        setNewContent('');
     };
 
+    const handleReply = async (postId: string) => {
+        const reply = replyContent[postId];
+        if (!reply) return;
+
+        if (db && isFirebaseConfigured) {
+            await updateDoc(doc(db, "community_posts", postId), { reply });
+        } else {
+            setPosts(posts.map(p => p.id === postId ? { ...p, reply } : p));
+        }
+        setReplyContent(prev => ({ ...prev, [postId]: '' }));
+    };
+
+    const handleDeletePost = async (postId: string) => {
+         if (!isAdmin) return;
+         if (confirm("确定删除这条帖子吗？")) {
+             if (db && isFirebaseConfigured) {
+                 await deleteDoc(doc(db, "community_posts", postId));
+             } else {
+                 setPosts(posts.filter(p => p.id !== postId));
+             }
+         }
+    }
+
     return (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-            <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl relative">
-                <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X size={20} /></button>
-                <h3 className="text-xl font-bold mb-2 flex items-center gap-2 text-slate-800"><MessageSquarePlus className="text-amber-500"/> 吐槽/许愿池</h3>
-                <p className="text-xs text-slate-500 mb-4">遇到 Bug？想加新功能？还是单纯想吐槽？畅所欲言！</p>
-                
-                <div className="flex gap-2 mb-4">
-                    {[{id: 'advice', label: '💡 提建议'}, {id: 'bug', label: '🐛 报Bug'}, {id: 'chat', label: '💬 随便聊'}].map(t => (
-                        <button key={t.id} onClick={() => setType(t.id)} className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all ${type === t.id ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'}`}>
-                            {t.label}
-                        </button>
-                    ))}
+        <div className="fixed inset-0 z-[110] bg-slate-100 flex flex-col animate-in slide-in-from-bottom-10 duration-300">
+            <div className="bg-white px-4 py-4 shadow-sm flex justify-between items-center shrink-0 z-10">
+                <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                    <MessageSquarePlus className="text-amber-500" /> 社区 & 更新日志
+                </h2>
+                <button onClick={onClose} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200"><X size={20} /></button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 max-w-3xl mx-auto w-full">
+                {/* 发布框 */}
+                <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
+                    <div className="flex gap-2 mb-3 overflow-x-auto pb-1">
+                        {isAdmin && <button onClick={() => setPostType('update')} className={`px-3 py-1.5 rounded-lg text-xs font-bold border whitespace-nowrap ${postType === 'update' ? 'bg-amber-500 text-white border-amber-500' : 'bg-white text-slate-600 border-slate-200'}`}>🚀 更新公告</button>}
+                        <button onClick={() => setPostType('advice')} className={`px-3 py-1.5 rounded-lg text-xs font-bold border whitespace-nowrap ${postType === 'advice' ? 'bg-blue-500 text-white border-blue-500' : 'bg-white text-slate-600 border-slate-200'}`}>💡 提建议</button>
+                        <button onClick={() => setPostType('bug')} className={`px-3 py-1.5 rounded-lg text-xs font-bold border whitespace-nowrap ${postType === 'bug' ? 'bg-red-500 text-white border-red-500' : 'bg-white text-slate-600 border-slate-200'}`}>🐛 报Bug</button>
+                        <button onClick={() => setPostType('chat')} className={`px-3 py-1.5 rounded-lg text-xs font-bold border whitespace-nowrap ${postType === 'chat' ? 'bg-emerald-500 text-white border-emerald-500' : 'bg-white text-slate-600 border-slate-200'}`}>💬 闲聊</button>
+                    </div>
+                    <textarea 
+                        value={newContent} 
+                        onChange={e => setNewContent(e.target.value)} 
+                        placeholder={isAdmin && postType === 'update' ? "发布新版本更新内容..." : "分享你的想法或反馈..."}
+                        className="w-full p-3 bg-slate-50 rounded-xl text-sm border border-slate-200 focus:ring-2 focus:ring-amber-400 outline-none resize-none h-24"
+                    />
+                    <div className="flex justify-end mt-2">
+                        <button onClick={handlePost} className="bg-slate-900 text-white px-6 py-2 rounded-xl text-sm font-bold flex items-center gap-2 hover:bg-slate-800"><Send size={14}/> 发布</button>
+                    </div>
                 </div>
 
-                <textarea 
-                    className="w-full h-32 p-3 bg-slate-50 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-amber-400 resize-none text-sm mb-4"
-                    placeholder="在这里写下你的想法..."
-                    value={content}
-                    onChange={e => setContent(e.target.value)}
-                />
+                {/* 帖子列表 */}
+                <div className="space-y-4 pb-20">
+                    {posts.map(post => (
+                        <div key={post.id} className={`p-5 rounded-2xl shadow-sm border relative group ${post.type === 'update' ? 'bg-amber-50 border-amber-100' : 'bg-white border-slate-100'}`}>
+                            {isAdmin && <button onClick={() => handleDeletePost(post.id)} className="absolute top-3 right-3 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16}/></button>}
+                            
+                            <div className="flex items-center gap-2 mb-2">
+                                {post.type === 'update' && <span className="bg-amber-500 text-white px-2 py-0.5 rounded text-[10px] font-bold uppercase">官方更新</span>}
+                                {post.type === 'advice' && <span className="bg-blue-100 text-blue-600 px-2 py-0.5 rounded text-[10px] font-bold uppercase">建议</span>}
+                                {post.type === 'bug' && <span className="bg-red-100 text-red-600 px-2 py-0.5 rounded text-[10px] font-bold uppercase">Bug</span>}
+                                {post.type === 'chat' && <span className="bg-emerald-100 text-emerald-600 px-2 py-0.5 rounded text-[10px] font-bold uppercase">闲聊</span>}
+                                <span className="text-slate-400 text-xs">{new Date(post.createdAt).toLocaleDateString()}</span>
+                            </div>
+                            
+                            <p className="text-slate-800 text-sm leading-relaxed whitespace-pre-wrap">{post.content}</p>
 
-                <button 
-                    onClick={handleSubmit} 
-                    disabled={isSubmitting}
-                    className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold flex items-center justify-center gap-2 transition-colors disabled:opacity-70"
-                >
-                    {isSubmitting ? <RefreshCw className="animate-spin" size={18}/> : <Send size={18}/>}
-                    {isSubmitting ? '发送中...' : '发射！'}
-                </button>
+                            {/* 管理员回复展示 */}
+                            {post.reply && (
+                                <div className="mt-3 bg-slate-100 p-3 rounded-xl border-l-4 border-amber-400">
+                                    <p className="text-xs font-bold text-slate-500 mb-1 flex items-center gap-1"><UserCog size={12}/> 管理员回复：</p>
+                                    <p className="text-sm text-slate-700">{post.reply}</p>
+                                </div>
+                            )}
+
+                            {/* 管理员回复输入框 */}
+                            {isAdmin && !post.reply && post.type !== 'update' && (
+                                <div className="mt-3 flex gap-2">
+                                    <input 
+                                        type="text" 
+                                        placeholder="回复..." 
+                                        className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-amber-400"
+                                        value={replyContent[post.id] || ''}
+                                        onChange={e => setReplyContent({...replyContent, [post.id]: e.target.value})}
+                                    />
+                                    <button onClick={() => handleReply(post.id)} className="text-amber-600 text-xs font-bold px-3 hover:bg-amber-50 rounded-lg">回复</button>
+                                </div>
+                            )}
+                        </div>
+                    ))}
+                </div>
             </div>
         </div>
     );
 };
 
-// [新增] 随机选择结果 模态框
+// [新增] 随机选择结果 模态框 (保持不变)
 const RandomResultModal = ({ r, onClose, onRetry, onViewDetails }: { r: Restaurant, onClose: () => void, onRetry: () => void, onViewDetails: () => void }) => {
     return (
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-in fade-in duration-300">
@@ -192,35 +281,151 @@ const RandomResultModal = ({ r, onClose, onRetry, onViewDetails }: { r: Restaura
     )
 }
 
-const AddRestaurantModal = ({ onClose, onAdd }: { onClose: () => void, onAdd: (r: Partial<Restaurant>) => void }) => {
-    const [formData, setFormData] = useState({ name: '', location: '', cuisine: 'Modern Australian', priceTier: '$$' });
+// [优化] 增强版添加餐厅模态框
+const AddRestaurantModal = ({ onClose, onAdd, regions, cuisines }: { onClose: () => void, onAdd: (r: Partial<Restaurant>) => void, regions: string[], cuisines: string[] }) => {
+    const [formData, setFormData] = useState({ 
+        name: '', 
+        location: '', 
+        cuisine: 'Modern Australian', 
+        priceTier: '$$', 
+        region: 'Sydney CBD',
+        photo: null as string | null
+    });
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files[0]) {
+            const base64 = await convertImageToBase64(e.target.files[0]);
+            setFormData({ ...formData, photo: base64 });
+        }
+    };
+
     const handleSubmit = () => {
         if(!formData.name) return alert("请输入餐厅名称");
-        onAdd({ ...formData, region: 'Custom Added', imageCategory: formData.cuisine, id: Date.now(), visited: false, isCustom: true });
+        if(!formData.location) return alert("请输入地址");
+        
+        onAdd({ 
+            ...formData, 
+            imageCategory: formData.cuisine, 
+            id: Date.now(), 
+            visited: false, 
+            isCustom: true,
+            userPhotos: formData.photo ? [formData.photo] : []
+        });
         onClose();
     };
+
     return (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-            <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl animate-in fade-in zoom-in duration-200">
-                <h3 className="text-xl font-bold mb-4 flex items-center gap-2"><Plus size={24} className="text-amber-500"/> 添加新餐厅</h3>
-                <div className="space-y-4">
-                    <input type="text" className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 outline-none" placeholder="餐厅名称" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
-                    <input type="text" className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 outline-none" placeholder="地点" value={formData.location} onChange={e => setFormData({...formData, location: e.target.value})} />
-                    <button onClick={handleSubmit} className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold">确认添加</button>
-                    <button onClick={onClose} className="w-full py-3 text-slate-400 font-medium text-sm">取消</button>
+            <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl animate-in fade-in zoom-in duration-200 overflow-hidden flex flex-col max-h-[90vh]">
+                <div className="p-4 border-b border-slate-100 flex justify-between items-center">
+                    <h3 className="text-lg font-bold flex items-center gap-2"><Plus size={20} className="text-amber-500"/> 添加新餐厅</h3>
+                    <button onClick={onClose}><X size={20} className="text-slate-400"/></button>
+                </div>
+                
+                <div className="p-6 space-y-4 overflow-y-auto">
+                    {/* 图片上传 */}
+                    <div 
+                        onClick={() => fileInputRef.current?.click()}
+                        className="w-full h-40 rounded-xl bg-slate-50 border-2 border-dashed border-slate-200 flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 transition-colors relative overflow-hidden"
+                    >
+                        {formData.photo ? (
+                            <img src={formData.photo} className="w-full h-full object-cover" />
+                        ) : (
+                            <>
+                                <ImageIcon className="text-slate-300 mb-2" size={32}/>
+                                <span className="text-xs text-slate-400 font-bold">点击上传封面图</span>
+                            </>
+                        )}
+                        <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handlePhotoSelect} />
+                    </div>
+
+                    <div>
+                        <label className="text-xs font-bold text-slate-500 mb-1 block">餐厅名称</label>
+                        <input type="text" className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-amber-400" placeholder="例如: McDonald's" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
+                    </div>
+                    
+                    <div>
+                        <label className="text-xs font-bold text-slate-500 mb-1 block">具体地址</label>
+                        <input type="text" className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-amber-400" placeholder="例如: 100 George St" value={formData.location} onChange={e => setFormData({...formData, location: e.target.value})} />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                         <div>
+                            <label className="text-xs font-bold text-slate-500 mb-1 block">地区</label>
+                            <select className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 outline-none appearance-none" value={formData.region} onChange={e => setFormData({...formData, region: e.target.value})}>
+                                {regions.filter(r => r !== 'All').map(r => <option key={r} value={r}>{r}</option>)}
+                                <option value="Custom">其他区域</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label className="text-xs font-bold text-slate-500 mb-1 block">菜系</label>
+                            <select className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 outline-none appearance-none" value={formData.cuisine} onChange={e => setFormData({...formData, cuisine: e.target.value})}>
+                                {cuisines.filter(c => c !== 'All').map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label className="text-xs font-bold text-slate-500 mb-1 block">价格等级</label>
+                        <div className="flex gap-2">
+                            {['$', '$$', '$$$', '$$$$'].map(p => (
+                                <button key={p} onClick={() => setFormData({...formData, priceTier: p})} className={`flex-1 py-2 rounded-lg text-sm font-bold border ${formData.priceTier === p ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-400 border-slate-200'}`}>{p}</button>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="p-4 border-t border-slate-100">
+                    <button onClick={handleSubmit} className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold shadow-lg hover:bg-slate-800">确认添加</button>
                 </div>
             </div>
         </div>
     )
 }
 
-const RestaurantModal = ({ r, onClose, onUpdate }: { r: Restaurant, onClose: () => void, onUpdate: (id: number, data: Partial<Restaurant>) => void }) => {
+// 管理员登录模态框
+const AdminLoginModal = ({ onClose, onLogin }: { onClose: () => void, onLogin: () => void }) => {
+    const [user, setUser] = useState('');
+    const [pass, setPass] = useState('');
+
+    const handleLogin = () => {
+        if (user === 'yhm123654' && pass === 'yhm123654') {
+            onLogin();
+            onClose();
+        } else {
+            alert("账号或密码错误");
+        }
+    }
+
+    return (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+            <div className="bg-white p-8 rounded-2xl w-full max-w-xs text-center animate-in zoom-in duration-200">
+                <div className="bg-slate-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <Lock className="text-slate-400" size={32}/>
+                </div>
+                <h3 className="text-xl font-bold mb-6">管理员登录</h3>
+                <input type="text" placeholder="账号" className="w-full mb-3 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-amber-400" value={user} onChange={e => setUser(e.target.value)} />
+                <input type="password" placeholder="密码" className="w-full mb-6 p-3 bg-slate-50 border border-slate-200 rounded-xl outline-none focus:border-amber-400" value={pass} onChange={e => setPass(e.target.value)} />
+                <button onClick={handleLogin} className="w-full py-3 bg-slate-900 text-white rounded-xl font-bold">登录</button>
+                <button onClick={onClose} className="mt-4 text-sm text-slate-400 hover:text-slate-600">取消</button>
+            </div>
+        </div>
+    )
+}
+
+const RestaurantModal = ({ r, onClose, onUpdate, onDelete, isAdmin }: { r: Restaurant, onClose: () => void, onUpdate: (id: number, data: Partial<Restaurant>) => void, onDelete: (id: number) => void, isAdmin: boolean }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [notes, setNotes] = useState(r.userNotes || '');
   const [dishes, setDishes] = useState(r.userDishes || '');
   const [price, setPrice] = useState<string | number>(r.userPrice || '');
   const [rating, setRating] = useState(r.userRating || 0);
   const [photos, setPhotos] = useState<string[]>(r.userPhotos || []);
+  
+  // 管理员可以修改基本信息
+  const [adminEditMode, setAdminEditMode] = useState(false);
+  const [baseInfo, setBaseInfo] = useState({ name: r.name, location: r.location, cuisine: r.cuisine, priceTier: r.priceTier });
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(r.name + ' ' + r.location + ' NSW')}`;
@@ -241,11 +446,32 @@ const RestaurantModal = ({ r, onClose, onUpdate }: { r: Restaurant, onClose: () 
     setIsEditing(false);
   };
 
+  const handleAdminSave = () => {
+      onUpdate(r.id, baseInfo);
+      setAdminEditMode(false);
+      alert("管理员修改已保存");
+  }
+
+  const handleDelete = () => {
+      if (confirm(`确定要删除餐厅 "${r.name}" 吗？此操作无法撤销。`)) {
+          onDelete(r.id);
+          onClose();
+      }
+  }
+
   return (
     <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center sm:p-4">
       <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-sm transition-opacity" onClick={onClose} />
       <div className="relative bg-slate-50 w-full sm:max-w-2xl h-[90vh] sm:h-[85vh] sm:rounded-2xl sm:shadow-2xl overflow-hidden flex flex-col animate-in slide-in-from-bottom-10 duration-300">
         <button onClick={onClose} className="absolute top-4 right-4 z-10 bg-black/30 hover:bg-black/50 text-white p-2 rounded-full backdrop-blur-md transition-colors"><X size={20} /></button>
+        
+        {/* 管理员删除按钮 */}
+        {isAdmin && (
+            <button onClick={handleDelete} className="absolute top-4 left-4 z-10 bg-red-500/80 hover:bg-red-600 text-white px-3 py-1.5 rounded-full backdrop-blur-md transition-colors text-xs font-bold flex items-center gap-1 shadow-lg">
+                <Trash2 size={14} /> 删除餐厅
+            </button>
+        )}
+
         <div className="flex-1 overflow-y-auto">
           <div className="h-56 sm:h-64 relative">
             <img src={photos.length > 0 ? photos[0] : getRestaurantCoverImage(r)} alt={r.name} className="w-full h-full object-cover" />
@@ -253,10 +479,18 @@ const RestaurantModal = ({ r, onClose, onUpdate }: { r: Restaurant, onClose: () 
             <div className="absolute bottom-0 left-0 right-0 p-6 text-white">
               <div className="flex items-center gap-2 text-amber-400 text-xs font-bold tracking-wider uppercase mb-2">
                 <span className="bg-amber-500/20 px-2 py-0.5 rounded border border-amber-500/30">{r.region}</span>
-                <span>{r.cuisine}</span>
+                {adminEditMode ? <input className="bg-black/50 text-white border border-white/30 rounded px-1 w-24 text-xs" value={baseInfo.cuisine} onChange={e => setBaseInfo({...baseInfo, cuisine: e.target.value})} /> : <span>{r.cuisine}</span>}
               </div>
-              <h2 className="text-3xl font-serif font-bold leading-none mb-2 shadow-black drop-shadow-md">{r.name}</h2>
-              <a href={googleMapsUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-white/90 hover:text-white hover:underline text-sm"><MapPin size={14} /> {r.location} <ExternalLink size={12} /></a>
+              {adminEditMode ? (
+                  <input className="text-3xl font-serif font-bold bg-black/50 border border-white/30 rounded w-full text-white mb-2" value={baseInfo.name} onChange={e => setBaseInfo({...baseInfo, name: e.target.value})} />
+              ) : (
+                  <h2 className="text-3xl font-serif font-bold leading-none mb-2 shadow-black drop-shadow-md">{r.name}</h2>
+              )}
+              
+              <div className="flex items-center gap-2">
+                <MapPin size={14} /> 
+                {adminEditMode ? <input className="bg-black/50 border border-white/30 rounded text-xs text-white w-full" value={baseInfo.location} onChange={e => setBaseInfo({...baseInfo, location: e.target.value})} /> : <span className="text-sm opacity-90">{r.location}</span>}
+              </div>
             </div>
           </div>
           <div className="p-6 space-y-6">
@@ -270,6 +504,24 @@ const RestaurantModal = ({ r, onClose, onUpdate }: { r: Restaurant, onClose: () 
                 <a href={r.sourceUrl} target="_blank" rel="noopener noreferrer" className="block w-full text-center py-3 bg-slate-100 text-slate-600 rounded-xl text-sm font-bold hover:bg-slate-200 transition-colors border border-slate-200">
                     访问官方网站
                 </a>
+             )}
+
+             {/* 管理员编辑基础信息面板 */}
+             {isAdmin && (
+                 <div className="bg-slate-900 text-white p-4 rounded-xl">
+                     <div className="flex justify-between items-center mb-2">
+                         <span className="text-xs font-bold text-amber-400 flex items-center gap-1"><UserCog size={14}/> 管理员权限</span>
+                         {!adminEditMode ? (
+                             <button onClick={() => setAdminEditMode(true)} className="text-xs bg-white/20 hover:bg-white/30 px-3 py-1 rounded">修改基础信息</button>
+                         ) : (
+                             <div className="flex gap-2">
+                                 <button onClick={() => setAdminEditMode(false)} className="text-xs text-slate-400">取消</button>
+                                 <button onClick={handleAdminSave} className="text-xs bg-amber-500 text-slate-900 px-3 py-1 rounded font-bold">保存修改</button>
+                             </div>
+                         )}
+                     </div>
+                     {adminEditMode && <div className="text-xs text-slate-400">正在编辑模式，直接在上方图片区域修改文字即可。</div>}
+                 </div>
              )}
 
              {!r.visited && !isEditing ? (
@@ -318,14 +570,16 @@ export default function NSWFoodTracker() {
   
   // 弹窗状态
   const [activeRestaurant, setActiveRestaurant] = useState<Restaurant | null>(null);
-  const [showFeedback, setShowFeedback] = useState(false); // [新增] 吐槽弹窗
-  const [randomRestaurant, setRandomRestaurant] = useState<Restaurant | null>(null); // [新增] 随机结果
+  const [showCommunity, setShowCommunity] = useState(false); 
+  const [randomRestaurant, setRandomRestaurant] = useState<Restaurant | null>(null);
+  
+  // 管理员状态
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showAdminLogin, setShowAdminLogin] = useState(false);
 
   const importInputRef = useRef<HTMLInputElement>(null);
-
-  // --- 分页/懒加载状态 ---
-  const [visibleCount, setVisibleCount] = useState(12); // 初始显示12个
-  const loadMoreRef = useRef<HTMLDivElement>(null); // 底部锚点
+  const [visibleCount, setVisibleCount] = useState(12); 
+  const loadMoreRef = useRef<HTMLDivElement>(null); 
 
   // 同步逻辑
   const checkForNewCodeData = async (existingData: Restaurant[]) => {
@@ -393,22 +647,15 @@ export default function NSWFoodTracker() {
     return { visited: visited.length, total, percentage, totalSpent, topCuisines, averageRating: avgRating };
   }, [restaurants]);
 
-  // 获取所有地区列表，用于下拉框
   const regions = useMemo(() => ['All', ...new Set(restaurants.map(r => r.region))].sort(), [restaurants]);
   const cuisines = useMemo(() => ['All', ...new Set(restaurants.map(r => r.cuisine))].sort(), [restaurants]);
   
-  // --- 核心筛选逻辑 ---
   const filteredList = useMemo(() => {
     let res = restaurants.filter(r => {
-      // 搜索匹配 (名称或地点)
       const matchesSearch = r.name.toLowerCase().includes(filter.toLowerCase()) || r.location.toLowerCase().includes(filter.toLowerCase());
-      // 地区匹配 (支持多重筛选)
       const matchesRegion = selectedRegion === 'All' || r.region === selectedRegion;
-      // 菜系匹配 (支持多重筛选)
       const matchesCuisine = selectedCuisine === 'All' || r.cuisine === selectedCuisine;
-      // 已访问匹配
       const matchesVisited = showVisitedOnly ? r.visited : true;
-      
       return matchesSearch && matchesRegion && matchesCuisine && matchesVisited;
     });
 
@@ -417,16 +664,12 @@ export default function NSWFoodTracker() {
     return res;
   }, [restaurants, filter, selectedRegion, selectedCuisine, showVisitedOnly, sortBy]);
 
-  // [新增] 随机选择逻辑
   const handleRandomPick = () => {
       const pool = filteredList.length > 0 ? filteredList : restaurants;
       if (pool.length === 0) return alert("当前列表为空，没法选呀！");
-      
-      // 简单的随机动画效果
       let count = 0;
       const interval = setInterval(() => {
           const temp = pool[Math.floor(Math.random() * pool.length)];
-          // 这里可以做一个简单的UI震动或者闪烁，但为了简洁直接出结果
           count++;
           if (count > 5) {
               clearInterval(interval);
@@ -435,30 +678,21 @@ export default function NSWFoodTracker() {
       }, 50);
   };
 
-  // 当筛选条件改变时，重置显示数量为初始值，并滚动到顶部
   useEffect(() => {
       setVisibleCount(12);
       window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [filter, selectedRegion, selectedCuisine, sortBy, showVisitedOnly, view]);
 
-  // --- 无限滚动监听器 ---
   useEffect(() => {
     const observer = new IntersectionObserver((entries) => {
-        // 如果底部锚点出现在视口中，且当前显示的少于总数
         if (entries[0].isIntersecting && visibleCount < filteredList.length) {
-            // 增加显示数量 (例如每次加12个)
             setVisibleCount(prev => prev + 12);
         }
     }, { threshold: 0.1 });
-
-    if (loadMoreRef.current) {
-        observer.observe(loadMoreRef.current);
-    }
-
+    if (loadMoreRef.current) observer.observe(loadMoreRef.current);
     return () => observer.disconnect();
   }, [visibleCount, filteredList.length]);
 
-  // 获取当前需要渲染的列表切片
   const visibleRestaurants = filteredList.slice(0, visibleCount);
 
   const handleUpdateRestaurant = async (id: number, data: Partial<Restaurant>) => {
@@ -471,9 +705,17 @@ export default function NSWFoodTracker() {
     }
     setActiveRestaurant(prev => prev && prev.id === id ? { ...prev, ...newData, visited: true } : prev);
   };
+
+  const handleDeleteRestaurant = async (id: number) => {
+      if (isFirebaseConfigured && db) {
+          await deleteDoc(doc(db, "restaurants", String(id)));
+      } else {
+          setRestaurants(prev => prev.filter(r => r.id !== id));
+      }
+  }
   
   const handleAddCustomRestaurant = async (newR: Partial<Restaurant>) => {
-      const completeR = { ...newR, userRating: 0, userPrice: '', userNotes: '', userDishes: '', userPhotos: [], visitedDate: null } as Restaurant;
+      const completeR = { ...newR, userRating: 0, userPrice: '', userNotes: '', userDishes: '', userPhotos: newR.userPhotos || [], visitedDate: null } as Restaurant;
       if (isFirebaseConfigured && db) {
           await setDoc(doc(db, "restaurants", String(completeR.id)), completeR);
       } else {
@@ -520,8 +762,8 @@ export default function NSWFoodTracker() {
               </div>
             </div>
             <div className="flex items-center gap-2 sm:gap-4">
-               {/* [新增] 吐槽按钮 */}
-               <button onClick={() => setShowFeedback(true)} className="text-slate-400 hover:text-white transition-colors p-1.5" title="吐槽/反馈">
+               {/* 社区/反馈按钮 */}
+               <button onClick={() => setShowCommunity(true)} className="text-slate-400 hover:text-white transition-colors p-1.5" title="社区/更新日志">
                    <MessageSquarePlus size={20} />
                </button>
                
@@ -546,7 +788,6 @@ export default function NSWFoodTracker() {
                   <input type="text" placeholder="搜餐厅..." className="w-full pl-9 pr-4 py-2.5 bg-white border border-slate-200 shadow-sm rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-400 transition-all text-sm" value={filter} onChange={(e) => setFilter(e.target.value)} />
                 </div>
                 
-                {/* 地区筛选下拉框 */}
                 <div className="relative min-w-[120px] sm:max-w-[160px]">
                     <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-500"><MapPin size={14} /></div>
                     <select 
@@ -559,18 +800,14 @@ export default function NSWFoodTracker() {
                     <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400"><ChevronDown size={14} /></div>
                 </div>
 
-                {/* 按钮组 */}
                 <div className="flex gap-2">
-                    {/* [新增] 随机选择按钮 */}
                     <button onClick={handleRandomPick} className="p-2.5 rounded-xl flex items-center justify-center transition-all border shadow-sm bg-amber-500 text-white border-amber-500 hover:bg-amber-600 hover:shadow-md" title="今天吃什么？"><Dices size={18} /></button>
-                    
                     <button onClick={() => setShowAddModal(true)} className="p-2.5 rounded-xl flex items-center justify-center transition-all border shadow-sm bg-slate-900 text-white border-slate-900 hover:bg-slate-800" title="添加餐厅"><Plus size={18} /></button>
                     <button onClick={() => setSortBy(prev => prev === 'default' ? 'rating' : prev === 'rating' ? 'price' : 'default')} className={`p-2.5 rounded-xl flex items-center justify-center transition-all border shadow-sm ${sortBy !== 'default' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200'}`} title="排序"><SortAsc size={18} /></button>
                     <button onClick={() => setShowVisitedOnly(!showVisitedOnly)} className={`p-2.5 rounded-xl flex items-center justify-center transition-all border shadow-sm ${showVisitedOnly ? 'bg-green-500 text-white border-green-500' : 'bg-white text-slate-600 border-slate-200'}`} title="只看打卡"><CheckCircle size={18} /></button>
                 </div>
               </div>
               
-              {/* 菜系横向滚动条 */}
               <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0 pt-1">
                 {cuisines.map(c => (
                   <button key={c} onClick={() => setSelectedCuisine(c)} className={`whitespace-nowrap px-3 py-1.5 rounded-full text-xs font-bold border transition-all ${selectedCuisine === c ? 'bg-amber-500 text-white border-amber-500 shadow-md' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300 hover:bg-slate-50'}`}>{c === 'All' ? '所有菜系' : c}</button>
@@ -578,7 +815,6 @@ export default function NSWFoodTracker() {
               </div>
             </div>
 
-            {/* 餐厅列表 (使用 visibleRestaurants 进行渲染) */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 pb-4">
               {visibleRestaurants.map(r => (
                   <div key={r.id} onClick={() => setActiveRestaurant(r)} className="group bg-white rounded-2xl overflow-hidden shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 cursor-pointer border border-slate-200 flex flex-col relative">
@@ -597,12 +833,12 @@ export default function NSWFoodTracker() {
                     </div>
                     <div className="p-3 bg-white flex flex-col gap-2 border-t border-slate-100">
                        <div className="flex items-center gap-1.5 text-slate-500 text-xs"><MapPin size={12} className="shrink-0 text-slate-400" /><span className="truncate">{r.location}</span></div>
+                       {/* 管理员删除按钮占位符，实际在详情页操作更安全 */}
                     </div>
                   </div>
               ))}
             </div>
             
-            {/* 懒加载锚点 */}
             {filteredList.length > visibleCount && (
                <div ref={loadMoreRef} className="py-8 flex justify-center items-center text-slate-400 text-sm">
                   <RefreshCw className="animate-spin mr-2" size={16}/> 正在加载更多...
@@ -654,15 +890,25 @@ export default function NSWFoodTracker() {
                 </div>
              </div>
              <div className="flex gap-2 justify-center py-4"><button onClick={handleExport} className="px-4 py-2 bg-white rounded-xl text-sm font-bold shadow-sm text-slate-600 flex items-center gap-2"><Download size={16}/> 备份数据</button><button onClick={() => importInputRef.current?.click()} className="px-4 py-2 bg-white rounded-xl text-sm font-bold shadow-sm text-slate-600 flex items-center gap-2"><Upload size={16}/> 恢复数据</button><input type="file" ref={importInputRef} className="hidden" onChange={handleImport} /></div>
+             
+             {/* 管理员登录入口 */}
+             <div className="text-center pt-10">
+                 {!isAdmin ? (
+                     <button onClick={() => setShowAdminLogin(true)} className="text-xs text-slate-300 hover:text-slate-500 flex items-center justify-center gap-1 mx-auto"><Lock size={12}/> 管理员登录</button>
+                 ) : (
+                     <button onClick={() => setIsAdmin(false)} className="text-xs text-red-400 hover:text-red-600 font-bold border border-red-200 px-3 py-1 rounded-full">退出管理员模式</button>
+                 )}
+             </div>
           </div>
         )}
       </main>
       
       {/* 弹窗组件挂载 */}
-      {activeRestaurant && <RestaurantModal r={activeRestaurant} onClose={() => setActiveRestaurant(null)} onUpdate={handleUpdateRestaurant} />}
-      {showAddModal && <AddRestaurantModal onClose={() => setShowAddModal(false)} onAdd={handleAddCustomRestaurant} />}
-      {showFeedback && <FeedbackModal onClose={() => setShowFeedback(false)} />}
+      {activeRestaurant && <RestaurantModal r={activeRestaurant} onClose={() => setActiveRestaurant(null)} onUpdate={handleUpdateRestaurant} onDelete={handleDeleteRestaurant} isAdmin={isAdmin} />}
+      {showAddModal && <AddRestaurantModal onClose={() => setShowAddModal(false)} onAdd={handleAddCustomRestaurant} regions={regions} cuisines={cuisines} />}
+      {showCommunity && <CommunityBoard isAdmin={isAdmin} onClose={() => setShowCommunity(false)} />}
       {randomRestaurant && <RandomResultModal r={randomRestaurant} onClose={() => setRandomRestaurant(null)} onRetry={handleRandomPick} onViewDetails={() => { setRandomRestaurant(null); setActiveRestaurant(randomRestaurant); }} />}
+      {showAdminLogin && <AdminLoginModal onClose={() => setShowAdminLogin(false)} onLogin={() => setIsAdmin(true)} />}
     </div>
   );
 }
