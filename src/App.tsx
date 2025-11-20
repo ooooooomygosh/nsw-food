@@ -161,7 +161,6 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
     const [postImage, setPostImage] = useState<string | null>(null);
     const [replyContent, setReplyContent] = useState<Record<string, string>>({}); 
     const [isSubmitting, setIsSubmitting] = useState(false);
-    // [修改] 移除 hasAuth 强制检查，因为数据库是开放的
     
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -172,12 +171,9 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
         setPostImage(null);
     }, [activeTab]);
 
-    // [移除] 强制 Auth 监听，因为会导致“正在连接”的假死状态
-
     // 数据加载
     useEffect(() => {
         if (db && isFirebaseConfigured) {
-            // 直接读取根目录 'community_posts'
             const q = query(collection(db, "community_posts"), orderBy("createdAt", "desc"));
             const unsubscribe = onSnapshot(q, (snapshot) => {
                 setPosts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Post)));
@@ -214,21 +210,31 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
         if (!newContent.trim() && !postImage) return; 
         if (activeTab === 'updates' && !newVersion.trim()) return alert("请输入版本号");
 
+        // Auth 检查放在后台，如果是匿名登录，通常会自动处理，这里不强制阻断，让 Firestore 规则决定
+        if (auth && !auth.currentUser) {
+            try { await signInAnonymously(auth); } catch (e) {}
+        }
+
         setIsSubmitting(true);
 
-        const newPost: Post = {
+        // [🔥 核心修复] 构建不包含 undefined 的对象
+        const basePost = {
             id: Date.now().toString(),
             content: newContent,
-            version: activeTab === 'updates' ? newVersion : undefined,
             type: activeTab === 'updates' ? 'update' : feedbackType,
-            image: postImage || undefined,
             createdAt: new Date().toISOString(),
             isAdminPost: activeTab === 'updates'
         };
 
+        // 动态添加可选字段，防止 undefined 进入 Firestore
+        const newPost: Post = {
+            ...basePost,
+            ...(activeTab === 'updates' && newVersion ? { version: newVersion } : {}),
+            ...(postImage ? { image: postImage } : {}),
+        } as Post;
+
         try {
             if (db && isFirebaseConfigured) {
-                // [修改] 直接写入，不检查 auth，因为规则允许公开写入
                 await addDoc(collection(db, "community_posts"), newPost);
             } else {
                 setPosts([newPost, ...posts]);
@@ -298,8 +304,6 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
                 </div>
 
                 <div className="flex-1 overflow-y-auto bg-slate-50/50 p-6">
-                    {/* [修改] 移除了 "正在连接服务器" 的 banner，因为它在无 Auth 模式下会误导用户 */}
-
                     {activeTab === 'updates' ? (
                         <div className="space-y-8 pl-2">
                             {isAdmin && (
@@ -753,6 +757,7 @@ export default function NSWFoodTracker() {
   // 保持匿名认证，以防万一规则改变，但不再作为硬性条件
   useEffect(() => {
       if (isFirebaseConfigured) {
+           // [修复2] 添加类型注解 (user: any)
            const unsubscribe = onAuthStateChanged(auth, (user: any) => {
                if (!user) {
                    signInAnonymously(auth).catch(console.error);
