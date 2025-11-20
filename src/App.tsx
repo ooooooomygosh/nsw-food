@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronDown, Award, ExternalLink, Map as MapIcon, Filter, Heart, Trash2, SortAsc, Download, Upload, RefreshCw, Plus, Globe, LayoutGrid, MessageSquarePlus, Dices, Send, Sparkles, Smile, Lock, UserCog, Tag, Image as ImageIcon, FileText, MessageCircle, GitCommit, Calendar, ChevronRight, History, Clock } from 'lucide-react';
+import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronDown, Award, ExternalLink, Map as MapIcon, Filter, Heart, Trash2, SortAsc, Download, Upload, RefreshCw, Plus, Globe, LayoutGrid, MessageSquarePlus, Dices, Send, Sparkles, Smile, Lock, UserCog, Tag, Image as ImageIcon, FileText, MessageCircle, GitCommit, Calendar, ChevronRight, History, Clock, HelpCircle, ArrowRight } from 'lucide-react';
 import { db, auth, isFirebaseConfigured } from './lib/firebase';
 import { collection, onSnapshot, doc, setDoc, updateDoc, addDoc, deleteDoc, query, orderBy } from 'firebase/firestore';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
@@ -32,9 +32,10 @@ interface Stats {
 
 interface Post {
     id: string;
-    content: string; // 对于更新日志，这里存放主要内容
-    version?: string; // 版本号，例如 v1.0.1
+    content: string;
+    version?: string;
     type: 'advice' | 'bug' | 'chat' | 'update'; 
+    image?: string; // [新增] 支持图片
     createdAt: string;
     reply?: string;
     isAdminPost?: boolean;
@@ -50,13 +51,13 @@ const convertImageToBase64 = (file: File): Promise<string> => {
       img.src = event.target?.result as string;
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 600; 
+        const MAX_WIDTH = 800; // 稍微调大一点
         const scaleSize = MAX_WIDTH / img.width;
         canvas.width = MAX_WIDTH;
         canvas.height = img.height * scaleSize;
         const ctx = canvas.getContext('2d');
         ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', 0.6)); 
+        resolve(canvas.toDataURL('image/jpeg', 0.7)); 
       };
     };
     reader.onerror = error => reject(error);
@@ -105,16 +106,60 @@ const StarRating = ({ rating, setRating, readonly = false, size = 'md' }: { rati
   );
 };
 
-// [重构] 社区/更新日志板块 - 侧边抽屉样式
+// [新增] 新手引导组件
+const IntroGuide = ({ onClose }: { onClose: () => void }) => {
+    const [step, setStep] = useState(0);
+    
+    const steps = [
+        { title: "欢迎来到 NSW 美食摘星! 👋", desc: "这是一个专为你打造的悉尼美食探索指南。", icon: <Sparkles size={48} className="text-amber-400 mb-4"/> },
+        { title: "精准筛选 🔍", desc: "通过顶部的搜索栏、地区选择器和菜系标签，快速找到你想吃的餐厅。", icon: <Filter size={48} className="text-blue-400 mb-4"/> },
+        { title: "不知道吃什么? 🎲", desc: "点击骰子图标，让命运帮你做决定！治愈选择困难症。", icon: <Dices size={48} className="text-purple-400 mb-4"/> },
+        { title: "社区与更新 💬", desc: "点击右上角的气泡图标，查看更新日志，或者在许愿池里吐槽、提建议。", icon: <MessageSquarePlus size={48} className="text-green-400 mb-4"/> }
+    ];
+
+    return (
+        <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in duration-300">
+            <div className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl relative">
+                <div className="flex flex-col items-center">
+                    {steps[step].icon}
+                    <h2 className="text-2xl font-bold text-slate-900 mb-3">{steps[step].title}</h2>
+                    <p className="text-slate-500 mb-8 leading-relaxed">{steps[step].desc}</p>
+                </div>
+                
+                <div className="flex gap-3">
+                    <div className="flex-1 flex justify-center gap-1.5 items-center">
+                        {steps.map((_, i) => (
+                            <div key={i} className={`h-1.5 rounded-full transition-all duration-300 ${i === step ? 'w-6 bg-amber-500' : 'w-1.5 bg-slate-200'}`} />
+                        ))}
+                    </div>
+                    <button 
+                        onClick={() => {
+                            if (step < steps.length - 1) setStep(step + 1);
+                            else onClose();
+                        }}
+                        className="bg-slate-900 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 hover:bg-slate-800 transition-colors"
+                    >
+                        {step === steps.length - 1 ? '开始探索' : '下一步'} <ArrowRight size={16}/>
+                    </button>
+                </div>
+            </div>
+        </div>
+    )
+}
+
+// [优化] 社区/更新日志板块
 const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () => void }) => {
     const [activeTab, setActiveTab] = useState<'updates' | 'feedback'>('updates');
     const [posts, setPosts] = useState<Post[]>([]);
     
     // 发帖状态
     const [newContent, setNewContent] = useState('');
-    const [newVersion, setNewVersion] = useState(''); // 仅用于更新日志
+    const [newVersion, setNewVersion] = useState(''); 
     const [feedbackType, setFeedbackType] = useState<'advice' | 'bug' | 'chat'>('advice');
+    const [postImage, setPostImage] = useState<string | null>(null); // [新增] 图片状态
     const [replyContent, setReplyContent] = useState<Record<string, string>>({}); 
+    
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     // 数据加载
     useEffect(() => {
@@ -141,8 +186,17 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
         if (!isFirebaseConfigured) localStorage.setItem('nsw_food_community_posts', JSON.stringify(posts));
     }, [posts]);
 
+    const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files[0]) {
+            const base64 = await convertImageToBase64(e.target.files[0]);
+            setPostImage(base64);
+        }
+        // 清空 input value，允许重复选择同一张图
+        if (e.target) e.target.value = '';
+    };
+
     const handlePost = async () => {
-        if (!newContent.trim()) return;
+        if (!newContent.trim() && !postImage) return; // 允许只发图片
         if (activeTab === 'updates' && !newVersion.trim()) return alert("请输入版本号");
 
         const newPost: Post = {
@@ -150,8 +204,9 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
             content: newContent,
             version: activeTab === 'updates' ? newVersion : undefined,
             type: activeTab === 'updates' ? 'update' : feedbackType,
+            image: postImage || undefined,
             createdAt: new Date().toISOString(),
-            isAdminPost: activeTab === 'updates' // 只有在更新Tab下发的是官方贴
+            isAdminPost: activeTab === 'updates'
         };
 
         if (db && isFirebaseConfigured) {
@@ -161,6 +216,7 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
         }
         setNewContent('');
         setNewVersion('');
+        setPostImage(null);
     };
 
     const handleReply = async (postId: string) => {
@@ -190,12 +246,9 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
 
     return (
         <div className="fixed inset-0 z-[150] flex justify-end">
-            {/* 背景遮罩 - 点击关闭 */}
             <div className="absolute inset-0 bg-black/20 backdrop-blur-sm transition-opacity" onClick={onClose}></div>
             
-            {/* 右侧抽屉 */}
             <div className="relative w-full max-w-md h-full bg-white shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
-                {/* 头部 */}
                 <div className="px-6 py-5 border-b border-slate-100 bg-white z-10 flex justify-between items-center">
                     <div>
                         <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
@@ -206,62 +259,37 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
                     <button onClick={onClose} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"><X size={20}/></button>
                 </div>
 
-                {/* Tabs */}
                 <div className="flex border-b border-slate-100">
-                    <button 
-                        onClick={() => setActiveTab('updates')} 
-                        className={`flex-1 py-4 text-sm font-bold transition-colors relative ${activeTab === 'updates' ? 'text-amber-600' : 'text-slate-400 hover:text-slate-600'}`}
-                    >
+                    <button onClick={() => setActiveTab('updates')} className={`flex-1 py-4 text-sm font-bold transition-colors relative ${activeTab === 'updates' ? 'text-amber-600' : 'text-slate-400 hover:text-slate-600'}`}>
                         <div className="flex items-center justify-center gap-2"><History size={16}/> 更新日志</div>
                         {activeTab === 'updates' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-amber-500 mx-8 rounded-t-full"/>}
                     </button>
-                    <button 
-                        onClick={() => setActiveTab('feedback')} 
-                        className={`flex-1 py-4 text-sm font-bold transition-colors relative ${activeTab === 'feedback' ? 'text-amber-600' : 'text-slate-400 hover:text-slate-600'}`}
-                    >
+                    <button onClick={() => setActiveTab('feedback')} className={`flex-1 py-4 text-sm font-bold transition-colors relative ${activeTab === 'feedback' ? 'text-amber-600' : 'text-slate-400 hover:text-slate-600'}`}>
                         <div className="flex items-center justify-center gap-2"><MessageCircle size={16}/> 许愿池</div>
                         {activeTab === 'feedback' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-amber-500 mx-8 rounded-t-full"/>}
                     </button>
                 </div>
 
-                {/* 内容区域 */}
                 <div className="flex-1 overflow-y-auto bg-slate-50/50 p-6">
                     {activeTab === 'updates' ? (
                         <div className="space-y-8 pl-2">
-                            {/* 更新发布框 (仅管理员) */}
                             {isAdmin && (
                                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 shadow-sm">
                                     <h3 className="text-xs font-bold text-amber-700 mb-3 flex items-center gap-1"><UserCog size={14}/> 发布新版本</h3>
-                                    <input 
-                                        type="text" 
-                                        placeholder="版本号 (e.g. v1.2.0)" 
-                                        className="w-full mb-2 px-3 py-2 bg-white rounded-lg text-sm border border-amber-200 outline-none focus:border-amber-400"
-                                        value={newVersion}
-                                        onChange={e => setNewVersion(e.target.value)}
-                                    />
-                                    <textarea 
-                                        placeholder="更新了什么..." 
-                                        className="w-full mb-2 px-3 py-2 bg-white rounded-lg text-sm border border-amber-200 outline-none focus:border-amber-400 h-20 resize-none"
-                                        value={newContent}
-                                        onChange={e => setNewContent(e.target.value)}
-                                    />
+                                    <input type="text" placeholder="版本号 (e.g. v1.2.0)" className="w-full mb-2 px-3 py-2 bg-white rounded-lg text-sm border border-amber-200 outline-none focus:border-amber-400" value={newVersion} onChange={e => setNewVersion(e.target.value)} />
+                                    <textarea placeholder="更新了什么..." className="w-full mb-2 px-3 py-2 bg-white rounded-lg text-sm border border-amber-200 outline-none focus:border-amber-400 h-20 resize-none" value={newContent} onChange={e => setNewContent(e.target.value)} />
                                     <button onClick={handlePost} className="w-full py-2 bg-amber-500 text-white rounded-lg text-xs font-bold hover:bg-amber-600">发布更新</button>
                                 </div>
                             )}
-
-                            {/* 时间轴列表 */}
                             <div className="relative border-l-2 border-slate-200 space-y-8">
                                 {updatePosts.map((post) => (
                                     <div key={post.id} className="ml-6 relative">
-                                        {/* 时间轴节点 */}
                                         <div className="absolute -left-[31px] top-0 bg-white border-2 border-amber-400 w-4 h-4 rounded-full shadow-sm"></div>
-                                        
                                         <div className="flex items-baseline gap-2 mb-1">
                                             <span className="text-sm font-black text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{post.version || 'Update'}</span>
                                             <span className="text-xs text-slate-400 flex items-center gap-1"><Calendar size={10}/> {new Date(post.createdAt).toLocaleDateString()}</span>
                                             {isAdmin && <button onClick={() => handleDeletePost(post.id)} className="ml-auto text-slate-300 hover:text-red-500"><Trash2 size={14}/></button>}
                                         </div>
-                                        
                                         <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
                                             {post.content}
                                         </div>
@@ -271,8 +299,7 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
                             </div>
                         </div>
                     ) : (
-                        <div className="space-y-4 pb-24">
-                            {/* 反馈列表 */}
+                        <div className="space-y-4 pb-32">
                             {feedbackPosts.map(post => (
                                 <div key={post.id} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 group">
                                     <div className="flex justify-between items-start mb-2">
@@ -284,9 +311,9 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
                                         </div>
                                         {isAdmin && <button onClick={() => handleDeletePost(post.id)} className="text-slate-200 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={14}/></button>}
                                     </div>
-                                    <p className="text-sm text-slate-800 mb-3 leading-relaxed">{post.content}</p>
+                                    {post.image && <img src={post.image} className="w-full h-32 object-cover rounded-lg mb-3 border border-slate-100" />}
+                                    <p className="text-sm text-slate-800 mb-3 leading-relaxed whitespace-pre-wrap">{post.content}</p>
                                     
-                                    {/* 管理员回复展示区 */}
                                     {post.reply && (
                                         <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 flex gap-3">
                                             <div className="bg-amber-100 w-6 h-6 rounded-full flex items-center justify-center shrink-0"><UserCog size={12} className="text-amber-600"/></div>
@@ -296,15 +323,9 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
                                             </div>
                                         </div>
                                     )}
-                                    {/* 回复输入框 */}
                                     {isAdmin && !post.reply && (
                                         <div className="mt-3 flex gap-2">
-                                            <input 
-                                                className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs focus:border-amber-400 outline-none"
-                                                placeholder="回复用户..."
-                                                value={replyContent[post.id] || ''}
-                                                onChange={e => setReplyContent({...replyContent, [post.id]: e.target.value})}
-                                            />
+                                            <input className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs focus:border-amber-400 outline-none" placeholder="回复用户..." value={replyContent[post.id] || ''} onChange={e => setReplyContent({...replyContent, [post.id]: e.target.value})} />
                                             <button onClick={() => handleReply(post.id)} className="text-xs bg-slate-900 text-white px-3 rounded-lg font-bold">发送</button>
                                         </div>
                                     )}
@@ -315,34 +336,43 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
                     )}
                 </div>
 
-                {/* 底部输入框 (仅在反馈 Tab 显示) */}
                 {activeTab === 'feedback' && (
                     <div className="p-4 bg-white border-t border-slate-100 z-10">
+                        {postImage && (
+                            <div className="relative w-16 h-16 mb-3 rounded-lg overflow-hidden border border-slate-200 group">
+                                <img src={postImage} className="w-full h-full object-cover" />
+                                <button onClick={() => setPostImage(null)} className="absolute top-0.5 right-0.5 bg-black/50 text-white rounded-full p-0.5 hover:bg-red-500"><X size={10}/></button>
+                            </div>
+                        )}
                         <div className="flex gap-2 mb-2">
                             {[
                                 {id: 'advice', label: '建议', icon: <Sparkles size={12}/>}, 
                                 {id: 'bug', label: 'Bug', icon: <FileText size={12}/>}, 
                                 {id: 'chat', label: '闲聊', icon: <MessageCircle size={12}/>}
                             ].map((t) => (
-                                <button 
-                                    key={t.id} 
-                                    onClick={() => setFeedbackType(t.id as any)}
-                                    className={`px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1 transition-all ${feedbackType === t.id ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
-                                >
+                                <button key={t.id} onClick={() => setFeedbackType(t.id as any)} className={`px-3 py-1.5 rounded-full text-xs font-bold flex items-center gap-1 transition-all ${feedbackType === t.id ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
                                     {t.icon} {t.label}
                                 </button>
                             ))}
                         </div>
-                        <div className="flex gap-2">
-                            <input 
-                                type="text"
-                                value={newContent}
-                                onChange={e => setNewContent(e.target.value)}
-                                onKeyDown={e => e.key === 'Enter' && handlePost()}
-                                placeholder="写下你的想法..."
-                                className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-amber-100 focus:border-amber-400 transition-all"
-                            />
-                            <button onClick={handlePost} className="bg-amber-500 hover:bg-amber-600 text-white w-12 h-12 rounded-xl flex items-center justify-center transition-colors shadow-sm shadow-amber-200">
+                        <div className="flex gap-2 items-end">
+                            <button onClick={() => fileInputRef.current?.click()} className="bg-slate-100 hover:bg-slate-200 text-slate-500 w-10 h-10 rounded-xl flex items-center justify-center transition-colors">
+                                <ImageIcon size={20}/>
+                            </button>
+                            <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleImageSelect} />
+                            
+                            <div className="flex-1 bg-slate-50 border border-slate-200 rounded-xl flex items-center px-3 focus-within:ring-2 focus-within:ring-amber-100 focus-within:border-amber-400 transition-all">
+                                <input 
+                                    type="text"
+                                    value={newContent}
+                                    onChange={e => setNewContent(e.target.value)}
+                                    onKeyDown={e => e.key === 'Enter' && handlePost()}
+                                    placeholder="写点什么..."
+                                    className="flex-1 bg-transparent py-3 text-sm outline-none"
+                                />
+                            </div>
+                            
+                            <button onClick={handlePost} className="bg-amber-500 hover:bg-amber-600 text-white w-10 h-10 rounded-xl flex items-center justify-center transition-colors shadow-sm shadow-amber-200">
                                 <Send size={18} className="ml-0.5"/>
                             </button>
                         </div>
@@ -673,6 +703,7 @@ export default function NSWFoodTracker() {
   const [activeRestaurant, setActiveRestaurant] = useState<Restaurant | null>(null);
   const [showCommunity, setShowCommunity] = useState(false); 
   const [randomRestaurant, setRandomRestaurant] = useState<Restaurant | null>(null);
+  const [showIntro, setShowIntro] = useState(false); // [新增] 新手引导状态
   
   // 管理员状态
   const [isAdmin, setIsAdmin] = useState(false);
@@ -681,6 +712,15 @@ export default function NSWFoodTracker() {
   const importInputRef = useRef<HTMLInputElement>(null);
   const [visibleCount, setVisibleCount] = useState(12); 
   const loadMoreRef = useRef<HTMLDivElement>(null); 
+
+  // [新增] 检查是否首次访问
+  useEffect(() => {
+      const hasSeenIntro = localStorage.getItem('nsw_food_intro_shown');
+      if (!hasSeenIntro) {
+          setShowIntro(true);
+          localStorage.setItem('nsw_food_intro_shown', 'true');
+      }
+  }, []);
 
   // 同步逻辑
   const checkForNewCodeData = async (existingData: Restaurant[]) => {
@@ -863,6 +903,11 @@ export default function NSWFoodTracker() {
               </div>
             </div>
             <div className="flex items-center gap-2 sm:gap-4">
+               {/* 新手引导按钮 */}
+               <button onClick={() => setShowIntro(true)} className="text-slate-400 hover:text-white transition-colors p-1.5" title="使用指南">
+                   <HelpCircle size={20} />
+               </button>
+
                {/* 社区/反馈按钮 */}
                <button onClick={() => setShowCommunity(true)} className="text-slate-400 hover:text-white transition-colors p-1.5 relative" title="社区/更新日志">
                    <MessageSquarePlus size={20} />
@@ -1017,6 +1062,7 @@ export default function NSWFoodTracker() {
       {showCommunity && <CommunityBoard isAdmin={isAdmin} onClose={() => setShowCommunity(false)} />}
       {randomRestaurant && <RandomResultModal r={randomRestaurant} onClose={() => setRandomRestaurant(null)} onRetry={handleRandomPick} onViewDetails={() => { setRandomRestaurant(null); setActiveRestaurant(randomRestaurant); }} />}
       {showAdminLogin && <AdminLoginModal onClose={() => setShowAdminLogin(false)} onLogin={() => setIsAdmin(true)} />}
+      {showIntro && <IntroGuide onClose={() => setShowIntro(false)} />}
     </div>
   );
 }
