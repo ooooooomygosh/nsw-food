@@ -1,8 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Search, MapPin, CheckCircle, Utensils, DollarSign, Star, X, ChevronDown, Award, ExternalLink, Map as MapIcon, Filter, Heart, Trash2, SortAsc, Download, Upload, RefreshCw, Plus, Globe, LayoutGrid, MessageSquarePlus, Dices, Send, Sparkles, Smile, Lock, UserCog, Tag, Image as ImageIcon, FileText, MessageCircle, GitCommit, Calendar, ChevronRight, History, Clock, HelpCircle, ArrowRight, AlertTriangle } from 'lucide-react';
 import { db, auth, isFirebaseConfigured } from './lib/firebase';
-import { collection, onSnapshot, doc, setDoc, updateDoc, addDoc, deleteDoc, query, orderBy, onAuthStateChanged } from 'firebase/firestore';
-import { signInAnonymously } from 'firebase/auth';
+// [修复1] 从 firestore 移除 onAuthStateChanged
+import { collection, onSnapshot, doc, setDoc, updateDoc, addDoc, deleteDoc, query, orderBy } from 'firebase/firestore';
+// [修复1] 将 onAuthStateChanged 添加到 auth 导入中
+import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -173,7 +175,8 @@ const CommunityBoard = ({ isAdmin, onClose }: { isAdmin: boolean, onClose: () =>
     // 监听 Auth 状态，确保已登录
     useEffect(() => {
         if (auth) {
-            const unsubscribe = onAuthStateChanged(auth, (user) => {
+            // [修复2] 添加类型注解 (user: any)
+            const unsubscribe = onAuthStateChanged(auth, (user: any) => {
                 setHasAuth(!!user);
             });
             return () => unsubscribe();
@@ -776,7 +779,8 @@ export default function NSWFoodTracker() {
   useEffect(() => {
       if (isFirebaseConfigured) {
            // 监听状态变化，如果未登录则匿名登录
-           const unsubscribe = onAuthStateChanged(auth, (user) => {
+           // [修复2] 添加类型注解 (user: any)
+           const unsubscribe = onAuthStateChanged(auth, (user: any) => {
                if (!user) {
                    signInAnonymously(auth).catch(console.error);
                }
